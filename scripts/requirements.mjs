@@ -136,8 +136,8 @@ await run("supports admin and employee views", async (page) => {
   await signIn(page);
   await expectVisible(page, page.getByText("Manager view"), "admin manager view missing");
   await expectVisible(page, page.getByText("Admin dashboard"), "admin dashboard missing");
-  await expectVisible(page, page.getByText("One-shot view"), "admin graphical overview missing");
-  await expectVisible(page, page.getByText("Individual performance"), "individual performance graph missing");
+  await expectVisible(page, page.getByText("Employee target pie"), "admin employee pie missing");
+  await expectVisible(page, page.getByText("Achieved").first(), "achieved amount label missing");
   await expectHidden(page, page.getByText(/\/20 logins/), "login capacity label is visible");
   await signOut(page);
   await signIn(page, "EMP101", "1111");
@@ -170,7 +170,7 @@ await run("admin target changes require Save and then update employee progress",
   await expectHidden(page, page.getByText("Team target"), "employee summary shows team target");
 });
 
-await run("employee entries accept numeric amounts and reject non-positive entries", async (page) => {
+await run("employee entries accept numeric amounts and support edit/delete", async (page) => {
   await seedDemoState(page);
   await signIn(page, "EMP101", "1111");
   await page.getByPlaceholder("100000").fill("abc12000x");
@@ -187,6 +187,17 @@ await run("employee entries accept numeric amounts and reject non-positive entri
   await page.getByRole("button", { name: "Save entry" }).click();
   await expectVisible(page, page.getByText("Entry saved."), "valid entry save notice missing");
   await expectVisible(page, page.getByText("26.0%").first(), "employee progress did not update");
+
+  const savedEntry = page.locator(".entry-row", { hasText: "₹30,000" });
+  await savedEntry.getByRole("button", { name: "Edit" }).click();
+  await page.getByPlaceholder("100000").fill("40000");
+  await page.getByRole("button", { name: "Update entry" }).click();
+  await expectVisible(page, page.getByText("Entry updated."), "entry update notice missing");
+  await expectVisible(page, page.locator(".entry-row", { hasText: "₹40,000" }), "updated entry amount missing");
+
+  await page.locator(".entry-row", { hasText: "₹40,000" }).getByRole("button", { name: "Delete" }).click();
+  await expectVisible(page, page.getByText("Entry deleted."), "entry delete notice missing");
+  await expectHidden(page, page.locator(".entry-row", { hasText: "₹40,000" }), "deleted entry still visible");
 });
 
 await run("employees can see team progress leaderboard", async (page) => {
@@ -194,6 +205,10 @@ await run("employees can see team progress leaderboard", async (page) => {
   await signIn(page, "EMP101", "1111");
   await expectVisible(page, page.getByText("Team progress"), "team progress section missing");
   await expectVisible(page, page.locator("tbody tr", { hasText: "Meera Iyer" }), "other employee progress missing");
+  const firstEmployee = await page.locator("tbody tr td strong").first().textContent();
+  if (firstEmployee !== "Kabir Khan") {
+    throw new Error(`leaderboard is not ranked by highest progress first; got ${firstEmployee}`);
+  }
 });
 
 await run("admin can create numeric and alphanumeric employee IDs with 4 digit PINs", async (page) => {
@@ -242,14 +257,14 @@ await run("PIN reset requires old PIN and admin can reset forgotten employee PIN
   await expectVisible(page, page.getByText("Employee view"), "admin-reset PIN did not work");
 });
 
-await run("admin CSV export starts a download for selected month", async (page) => {
+await run("admin XLSX export starts a two-sheet workbook download", async (page) => {
   await seedDemoState(page);
   await signIn(page);
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Export CSV" }).click();
+  await page.getByRole("button", { name: "Export XLSX" }).click();
   const download = await downloadPromise;
-  if (!download.suggestedFilename().startsWith("trackboard-")) {
-    throw new Error(`unexpected CSV filename ${download.suggestedFilename()}`);
+  if (!download.suggestedFilename().startsWith("trackboard-") || !download.suggestedFilename().endsWith(".xlsx")) {
+    throw new Error(`unexpected XLSX filename ${download.suggestedFilename()}`);
   }
 });
 

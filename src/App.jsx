@@ -2,14 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
   CalendarDays,
-  Trash2,
   Download,
   KeyRound,
   Landmark,
   LogOut,
+  Pencil,
   Plus,
   Save,
   Target,
+  Trash2,
   Trophy,
   UserRound,
   UsersRound,
@@ -71,6 +72,167 @@ function getMonthFromDate(date) {
 function clampProgress(value) {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(value, 999));
+}
+
+function xmlEscape(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function columnName(index) {
+  let name = "";
+  let current = index + 1;
+  while (current > 0) {
+    const remainder = (current - 1) % 26;
+    name = String.fromCharCode(65 + remainder) + name;
+    current = Math.floor((current - 1) / 26);
+  }
+  return name;
+}
+
+function sheetXml(rows) {
+  const body = rows
+    .map((row, rowIndex) => {
+      const cells = row
+        .map((cell, cellIndex) => {
+          const ref = `${columnName(cellIndex)}${rowIndex + 1}`;
+          if (typeof cell === "number") {
+            return `<c r="${ref}"><v>${cell}</v></c>`;
+          }
+          return `<c r="${ref}" t="inlineStr"><is><t>${xmlEscape(cell)}</t></is></c>`;
+        })
+        .join("");
+      return `<row r="${rowIndex + 1}">${cells}</row>`;
+    })
+    .join("");
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${body}</sheetData></worksheet>`;
+}
+
+function crc32(bytes) {
+  let crc = -1;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ -1) >>> 0;
+}
+
+function writeUint16(output, value) {
+  output.push(value & 255, (value >>> 8) & 255);
+}
+
+function writeUint32(output, value) {
+  output.push(value & 255, (value >>> 8) & 255, (value >>> 16) & 255, (value >>> 24) & 255);
+}
+
+function createZip(files) {
+  const encoder = new TextEncoder();
+  const output = [];
+  const centralDirectory = [];
+  let offset = 0;
+
+  for (const file of files) {
+    const nameBytes = encoder.encode(file.name);
+    const dataBytes = encoder.encode(file.content);
+    const checksum = crc32(dataBytes);
+
+    writeUint32(output, 0x04034b50);
+    writeUint16(output, 20);
+    writeUint16(output, 0);
+    writeUint16(output, 0);
+    writeUint16(output, 0);
+    writeUint16(output, 0);
+    writeUint32(output, checksum);
+    writeUint32(output, dataBytes.length);
+    writeUint32(output, dataBytes.length);
+    writeUint16(output, nameBytes.length);
+    writeUint16(output, 0);
+    output.push(...nameBytes, ...dataBytes);
+
+    const central = [];
+    writeUint32(central, 0x02014b50);
+    writeUint16(central, 20);
+    writeUint16(central, 20);
+    writeUint16(central, 0);
+    writeUint16(central, 0);
+    writeUint16(central, 0);
+    writeUint16(central, 0);
+    writeUint32(central, checksum);
+    writeUint32(central, dataBytes.length);
+    writeUint32(central, dataBytes.length);
+    writeUint16(central, nameBytes.length);
+    writeUint16(central, 0);
+    writeUint16(central, 0);
+    writeUint16(central, 0);
+    writeUint16(central, 0);
+    writeUint32(central, 0);
+    writeUint32(central, offset);
+    central.push(...nameBytes);
+    centralDirectory.push(central);
+    offset = output.length;
+  }
+
+  const centralStart = output.length;
+  for (const central of centralDirectory) output.push(...central);
+  const centralSize = output.length - centralStart;
+
+  writeUint32(output, 0x06054b50);
+  writeUint16(output, 0);
+  writeUint16(output, 0);
+  writeUint16(output, files.length);
+  writeUint16(output, files.length);
+  writeUint32(output, centralSize);
+  writeUint32(output, centralStart);
+  writeUint16(output, 0);
+
+  return new Uint8Array(output);
+}
+
+function createWorkbook(sheets) {
+  const workbookSheets = sheets
+    .map((sheet, index) => `<sheet name="${xmlEscape(sheet.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`)
+    .join("");
+  const relationships = sheets
+    .map(
+      (_, index) =>
+        `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`
+    )
+    .join("");
+  const overrides = sheets
+    .map(
+      (_, index) =>
+        `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`
+    )
+    .join("");
+
+  return createZip([
+    {
+      name: "[Content_Types].xml",
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${overrides}</Types>`,
+    },
+    {
+      name: "_rels/.rels",
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+    },
+    {
+      name: "xl/workbook.xml",
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${workbookSheets}</sheets></workbook>`,
+    },
+    {
+      name: "xl/_rels/workbook.xml.rels",
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relationships}</Relationships>`,
+    },
+    ...sheets.map((sheet, index) => ({
+      name: `xl/worksheets/sheet${index + 1}.xml`,
+      content: sheetXml(sheet.rows),
+    })),
+  ]);
 }
 
 function loadState() {
@@ -142,6 +304,7 @@ export default function App() {
     date: new Date().toISOString().slice(0, 10),
     amount: "",
   });
+  const [editingEntryId, setEditingEntryId] = useState(null);
   const [employeeForm, setEmployeeForm] = useState({ id: "", name: "", pin: "" });
   const [targetDrafts, setTargetDrafts] = useState({});
   const [deleteCandidate, setDeleteCandidate] = useState(null);
@@ -459,6 +622,42 @@ export default function App() {
       return;
     }
 
+    if (editingEntryId) {
+      if (USE_SUPABASE) {
+        const { data, error } = await supabase.rpc("app_update_recovery", {
+          employee_code_input: currentUser.id,
+          employee_pin: session.pin,
+          entry_id_input: editingEntryId,
+          recovery_date_input: entryForm.date,
+          recovery_amount: amount,
+        });
+
+        if (error || !data) {
+          flash("Entry could not be updated.");
+          return;
+        }
+
+        await refreshRemoteState();
+        setEditingEntryId(null);
+        setSelectedMonth(getMonthFromDate(entryForm.date));
+        setEntryForm({ date: new Date().toISOString().slice(0, 10), amount: "" });
+        flash("Entry updated.");
+        return;
+      }
+
+      setState((current) => ({
+        ...current,
+        recoveries: current.recoveries.map((entry) =>
+          entry.id === editingEntryId ? { ...entry, date: entryForm.date, amount } : entry
+        ),
+      }));
+      setEditingEntryId(null);
+      setSelectedMonth(getMonthFromDate(entryForm.date));
+      setEntryForm({ date: new Date().toISOString().slice(0, 10), amount: "" });
+      flash("Entry updated.");
+      return;
+    }
+
     if (USE_SUPABASE) {
       const { data, error } = await supabase.rpc("app_add_recovery", {
         employee_code_input: currentUser.id,
@@ -494,6 +693,45 @@ export default function App() {
     setSelectedMonth(getMonthFromDate(entryForm.date));
     setEntryForm((current) => ({ ...current, amount: "" }));
     flash("Entry saved.");
+  }
+
+  function startEditEntry(entry) {
+    setEditingEntryId(entry.id);
+    setEntryForm({ date: entry.date, amount: String(entry.amount) });
+  }
+
+  function cancelEditEntry() {
+    setEditingEntryId(null);
+    setEntryForm({ date: new Date().toISOString().slice(0, 10), amount: "" });
+  }
+
+  async function deleteRecovery(entryId) {
+    if (!currentUser || currentUser.role !== "employee") return;
+
+    if (USE_SUPABASE) {
+      const { data, error } = await supabase.rpc("app_delete_recovery", {
+        employee_code_input: currentUser.id,
+        employee_pin: session.pin,
+        entry_id_input: entryId,
+      });
+
+      if (error || !data) {
+        flash("Entry could not be deleted.");
+        return;
+      }
+
+      await refreshRemoteState();
+      if (editingEntryId === entryId) cancelEditEntry();
+      flash("Entry deleted.");
+      return;
+    }
+
+    setState((current) => ({
+      ...current,
+      recoveries: current.recoveries.filter((entry) => entry.id !== entryId),
+    }));
+    if (editingEntryId === entryId) cancelEditEntry();
+    flash("Entry deleted.");
   }
 
   async function addEmployee(event) {
@@ -638,8 +876,59 @@ export default function App() {
     setDeleteCandidate(null);
   }
 
+  function exportXlsx() {
+    const detailedRows = state.recoveries
+      .filter((entry) => getMonthFromDate(entry.date) === selectedMonth)
+      .sort((a, b) => a.employeeId.localeCompare(b.employeeId) || b.date.localeCompare(a.date))
+      .map((entry) => {
+        const employee = state.employees.find((item) => item.id === entry.employeeId);
+        const row = rows.find((item) => item.id === entry.employeeId);
+        return [
+          entry.employeeId,
+          employee?.name || "",
+          entry.date,
+          Number(entry.amount),
+          selectedMonth,
+          row?.targetName || "Monthly target",
+        ];
+      });
+    const workbook = createWorkbook([
+      {
+        name: "Summary",
+        rows: [
+          ["Employee ID", "Name", "Month", "Target Name", "Target", "Achieved", "Progress %"],
+          ...rows.map((row) => [
+            row.id,
+            row.name,
+            selectedMonth,
+            row.targetName,
+            row.target,
+            row.recovered,
+            Number(row.progress.toFixed(2)),
+          ]),
+        ],
+      },
+      {
+        name: "Detailed Entries",
+        rows: [
+          ["Employee ID", "Name", "Entry Date", "Entry Amount", "Month", "Target Name"],
+          ...detailedRows,
+        ],
+      },
+    ]);
+    const blob = new Blob([workbook], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `trackboard-${selectedMonth}.xlsx`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   function exportCsv() {
-    const header = ["Employee ID", "Name", "Month", "Target Name", "Target", "Amount", "Progress %"];
+    const header = ["Employee ID", "Name", "Month", "Target Name", "Target", "Achieved", "Progress %"];
     const body = rows.map((row) => [
       row.id,
       row.name,
@@ -887,20 +1176,22 @@ export default function App() {
           </select>
         </label>
         {isAdmin && (
-          <button className="secondary-button" type="button" onClick={exportCsv}>
+          <button className="secondary-button" type="button" onClick={exportXlsx}>
             <Download size={18} aria-hidden="true" />
-            Export CSV
+            Export XLSX
           </button>
         )}
       </section>
 
       {notice && <p className="notice floating">{notice}</p>}
 
-      <section className="summary-grid" aria-label="Summary">
-        <MetricCard icon={Target} label={summary.targetLabel} value={formatCurrency(summary.target)} />
-        <MetricCard icon={Landmark} label={summary.recoveredLabel} value={formatCurrency(summary.recovered)} />
-        <MetricCard icon={BarChart3} label={summary.progressLabel} value={`${summary.progress.toFixed(1)}%`} />
-      </section>
+      {!isAdmin && (
+        <section className="summary-grid" aria-label="Summary">
+          <MetricCard icon={Target} label={summary.targetLabel} value={formatCurrency(summary.target)} />
+          <MetricCard icon={Landmark} label={summary.recoveredLabel} value={formatCurrency(summary.recovered)} />
+          <MetricCard icon={BarChart3} label={summary.progressLabel} value={`${summary.progress.toFixed(1)}%`} />
+        </section>
+      )}
 
       {isAdmin ? (
         <AdminView
@@ -926,8 +1217,12 @@ export default function App() {
             .filter((item) => item.employeeId === currentUser.id && getMonthFromDate(item.date) === selectedMonth)
             .sort((a, b) => b.date.localeCompare(a.date))}
           entryForm={entryForm}
+          editingEntryId={editingEntryId}
           onEntryFormChange={setEntryForm}
           onAddRecovery={addRecovery}
+          onStartEditEntry={startEditEntry}
+          onCancelEditEntry={cancelEditEntry}
+          onDeleteRecovery={deleteRecovery}
         />
       )}
 
@@ -1037,26 +1332,15 @@ function AdminDashboard({ rows, selectedMonth, targetDrafts, onTargetDraftChange
   return (
     <>
       <section className="overview-grid" aria-label="Graphical performance overview">
-        <section className="chart-panel team-panel">
+        <section className="chart-panel team-panel wide-panel">
           <div className="section-heading compact">
             <div>
               <p className="eyebrow">Admin dashboard</p>
-              <h2>One-shot view</h2>
+              <h2>Employee target pie</h2>
             </div>
             <BarChart3 size={22} aria-hidden="true" />
           </div>
-          <TeamChart rows={rows} />
-        </section>
-
-        <section className="chart-panel">
-          <div className="section-heading compact">
-            <div>
-              <p className="eyebrow">Individual performance</p>
-              <h2>Progress by employee</h2>
-            </div>
-            <Trophy size={22} aria-hidden="true" />
-          </div>
-          <PerformanceBars rows={rows} />
+          <EmployeePieChart rows={rows} />
         </section>
       </section>
 
@@ -1216,6 +1500,55 @@ function TeamChart({ rows }) {
   );
 }
 
+function EmployeePieChart({ rows }) {
+  if (rows.length === 0) {
+    return <p className="empty-state">No employees yet.</p>;
+  }
+
+  const colors = ["#7ee0c5", "#f2bf57", "#8ca5ff", "#ff8f70", "#b6e66a", "#d28cff", "#69c7ff", "#ff7ea8"];
+  const totalTarget = rows.reduce((sum, row) => sum + row.target, 0);
+  const fallbackShare = 100 / rows.length;
+  let cursor = 0;
+  const segments = rows.map((row, index) => {
+    const share = totalTarget > 0 ? (row.target / totalTarget) * 100 : fallbackShare;
+    const start = cursor;
+    cursor += share;
+    return `${colors[index % colors.length]} ${start}% ${cursor}%`;
+  });
+
+  return (
+    <div className="employee-pie-layout">
+      <div className="employee-pie" style={{ background: `conic-gradient(${segments.join(", ")})` }}>
+        <span>{rows.length}</span>
+        <small>employees</small>
+      </div>
+      <div className="pie-legend">
+        {rows.map((row, index) => (
+          <article className="pie-item" key={row.id}>
+            <span className="pie-swatch" style={{ background: colors[index % colors.length] }} />
+            <div>
+              <strong>{row.name}</strong>
+              <span>{row.targetName}</span>
+            </div>
+            <div className="pie-values">
+              <b>{formatCurrency(row.target)}</b>
+              <span>Target</span>
+            </div>
+            <div className="pie-values">
+              <b>{formatCurrency(row.recovered)}</b>
+              <span>Achieved</span>
+            </div>
+            <div className="pie-values">
+              <b>{row.progress.toFixed(1)}%</b>
+              <span>Done</span>
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PerformanceBars({ rows }) {
   if (rows.length === 0) {
     return <p className="empty-state">No employees yet.</p>;
@@ -1262,7 +1595,19 @@ function EmployeeDirectory({ rows, onRequestDelete }) {
   );
 }
 
-function EmployeeView({ currentUser, ownRow, rows, entries, entryForm, onEntryFormChange, onAddRecovery }) {
+function EmployeeView({
+  currentUser,
+  ownRow,
+  rows,
+  entries,
+  entryForm,
+  editingEntryId,
+  onEntryFormChange,
+  onAddRecovery,
+  onStartEditEntry,
+  onCancelEditEntry,
+  onDeleteRecovery,
+}) {
   return (
     <>
       <section className="personal-band">
@@ -1280,7 +1625,7 @@ function EmployeeView({ currentUser, ownRow, rows, entries, entryForm, onEntryFo
       <section className="split-layout">
         <form className="panel stack" onSubmit={onAddRecovery}>
           <div className="section-heading compact">
-            <h2>Add entry</h2>
+            <h2>{editingEntryId ? "Edit entry" : "Add entry"}</h2>
             <CalendarDays size={22} aria-hidden="true" />
           </div>
           <label>
@@ -1307,10 +1652,17 @@ function EmployeeView({ currentUser, ownRow, rows, entries, entryForm, onEntryFo
               placeholder="100000"
             />
           </label>
-          <button className="primary-button" type="submit">
-            <Save size={18} aria-hidden="true" />
-            Save entry
-          </button>
+          <div className="form-actions">
+            <button className="primary-button" type="submit">
+              <Save size={18} aria-hidden="true" />
+              {editingEntryId ? "Update entry" : "Save entry"}
+            </button>
+            {editingEntryId && (
+              <button className="secondary-button" type="button" onClick={onCancelEditEntry}>
+                Cancel
+              </button>
+            )}
+          </div>
         </form>
 
         <section className="panel">
@@ -1324,8 +1676,20 @@ function EmployeeView({ currentUser, ownRow, rows, entries, entryForm, onEntryFo
             ) : (
               entries.map((entry) => (
                 <div className="entry-row" key={entry.id}>
-                  <span>{new Date(entry.date).toLocaleDateString("en-IN")}</span>
-                  <strong>{formatCurrency(entry.amount)}</strong>
+                  <div>
+                    <span>{new Date(entry.date).toLocaleDateString("en-IN")}</span>
+                    <strong>{formatCurrency(entry.amount)}</strong>
+                  </div>
+                  <div className="row-actions">
+                    <button className="mini-button" type="button" onClick={() => onStartEditEntry(entry)}>
+                      <Pencil size={15} aria-hidden="true" />
+                      Edit
+                    </button>
+                    <button className="mini-danger-button" type="button" onClick={() => onDeleteRecovery(entry.id)}>
+                      <Trash2 size={15} aria-hidden="true" />
+                      Delete
+                    </button>
+                  </div>
                 </div>
               ))
             )}

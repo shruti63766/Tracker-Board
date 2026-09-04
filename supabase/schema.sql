@@ -1,4 +1,5 @@
-create extension if not exists pgcrypto;
+create schema if not exists extensions;
+create extension if not exists pgcrypto with schema extensions;
 
 create type public.app_role as enum ('admin', 'employee');
 
@@ -31,7 +32,7 @@ begin
   end if;
 
   insert into public.profile_credentials (profile_id, pin_hash, updated_at)
-  values (target_profile_id, crypt(plain_pin, gen_salt('bf')), now())
+  values (target_profile_id, extensions.crypt(plain_pin, extensions.gen_salt('bf')), now())
   on conflict (profile_id)
   do update set pin_hash = excluded.pin_hash, updated_at = now();
 end;
@@ -66,12 +67,12 @@ begin
     return false;
   end if;
 
-  if crypt(old_pin, stored_hash) <> stored_hash then
+  if extensions.crypt(old_pin, stored_hash) <> stored_hash then
     return false;
   end if;
 
   update public.profile_credentials
-  set pin_hash = crypt(new_pin, gen_salt('bf')),
+  set pin_hash = extensions.crypt(new_pin, extensions.gen_salt('bf')),
       updated_at = now()
   where profile_id = target_profile_id;
 
@@ -285,7 +286,7 @@ begin
   join public.profile_credentials c on c.profile_id = p.id
   where lower(p.employee_code) = lower(employee_code_input)
     and p.active = true
-    and crypt(plain_pin, c.pin_hash) = c.pin_hash
+    and extensions.crypt(plain_pin, c.pin_hash) = c.pin_hash
   limit 1;
 end;
 $$;
@@ -616,6 +617,73 @@ begin
 end;
 $$;
 
+create or replace function public.app_update_recovery(
+  employee_code_input text,
+  employee_pin text,
+  entry_id_input uuid,
+  recovery_date_input date,
+  recovery_amount numeric
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  employee_profile record;
+begin
+  select * into employee_profile
+  from public.app_verify_pin(employee_code_input, employee_pin)
+  where role = 'employee'
+  limit 1;
+
+  if employee_profile.profile_id is null
+    or recovery_amount <= 0
+    or recovery_amount <> trunc(recovery_amount)
+    or recovery_date_input < date_trunc('month', current_date)::date - interval '5 months' then
+    return false;
+  end if;
+
+  update public.recovery_entries
+  set recovery_date = recovery_date_input,
+      amount = recovery_amount
+  where id = entry_id_input
+    and employee_id = employee_profile.profile_id;
+
+  return found;
+end;
+$$;
+
+create or replace function public.app_delete_recovery(
+  employee_code_input text,
+  employee_pin text,
+  entry_id_input uuid
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  employee_profile record;
+begin
+  select * into employee_profile
+  from public.app_verify_pin(employee_code_input, employee_pin)
+  where role = 'employee'
+  limit 1;
+
+  if employee_profile.profile_id is null then
+    return false;
+  end if;
+
+  delete from public.recovery_entries
+  where id = entry_id_input
+    and employee_id = employee_profile.profile_id;
+
+  return found;
+end;
+$$;
+
 grant execute on function public.app_verify_pin(text, text) to anon, authenticated;
 grant execute on function public.app_has_admin() to anon, authenticated;
 grant execute on function public.app_setup_admin(text, text, text) to anon, authenticated;
@@ -625,4 +693,6 @@ grant execute on function public.app_admin_reset_pin(text, text, text, text) to 
 grant execute on function public.app_delete_employee(text, text, text) to anon, authenticated;
 grant execute on function public.app_upsert_target(text, text, text, text, text, numeric) to anon, authenticated;
 grant execute on function public.app_add_recovery(text, text, date, numeric) to anon, authenticated;
+grant execute on function public.app_update_recovery(text, text, uuid, date, numeric) to anon, authenticated;
+grant execute on function public.app_delete_recovery(text, text, uuid) to anon, authenticated;
 grant execute on function public.reset_profile_pin(text, text, text) to anon, authenticated;
