@@ -487,13 +487,15 @@ input::placeholder {
 
 .wide-panel {
   min-width: 0;
+  overflow-x: auto;
 }
 
 .employee-pie-layout {
   display: grid;
-  grid-template-columns: minmax(210px, 280px) minmax(0, 1fr);
+  grid-template-columns: minmax(170px, 240px) minmax(520px, 1fr);
   align-items: start;
   gap: 22px;
+  min-width: 740px;
 }
 
 .employee-pie-card {
@@ -549,26 +551,6 @@ input::placeholder {
   text-transform: uppercase;
 }
 
-.pie-focus-card {
-  display: grid;
-  width: min(100%, 260px);
-  gap: 6px;
-  padding: 13px;
-  border: 1px solid rgba(155, 180, 169, 0.14);
-  border-radius: 8px;
-  background: #0a1514;
-}
-
-.pie-focus-card span,
-.pie-focus-card small {
-  color: #91a49b;
-  font-weight: 800;
-}
-
-.pie-focus-card b {
-  color: #f7fffb;
-}
-
 .pie-table-wrap {
   max-height: 340px;
   overflow: auto;
@@ -577,13 +559,36 @@ input::placeholder {
   background: #0a1514;
 }
 
+.pie-focus-strip {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(155, 180, 169, 0.14);
+  background: #0f1b19;
+}
+
+.pie-focus-strip span {
+  color: #91a49b;
+  font-weight: 800;
+}
+
+.pie-focus-strip b {
+  color: #7ee0c5;
+  font-size: 0.86rem;
+}
+
 .pie-table {
   min-width: 720px;
 }
 
 .pie-table th {
   position: sticky;
-  top: 0;
+  top: 45px;
   z-index: 1;
 }
 
@@ -961,8 +966,7 @@ tr:last-child td {
   }
 
   .team-chart,
-  .bar-row,
-  .employee-pie-layout {
+  .bar-row {
     grid-template-columns: 1fr;
   }
 

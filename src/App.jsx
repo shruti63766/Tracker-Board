@@ -1558,20 +1558,14 @@ function EmployeePieChart({ rows }) {
             achieved
           </text>
         </svg>
-        <figcaption className="pie-focus-card">
-          <strong>{activeRow.name}</strong>
-          <span>{activeRow.targetName}</span>
-          <div>
-            <b>{formatCurrency(activeRow.target)}</b>
-            <small>Target</small>
-          </div>
-          <div>
-            <b>{formatCurrency(activeRow.recovered)}</b>
-            <small>Achieved</small>
-          </div>
-        </figcaption>
       </figure>
       <div className="pie-table-wrap" aria-label="Employee pie details">
+        <div className="pie-focus-strip">
+          <strong>{activeRow.name}</strong>
+          <span>{activeRow.targetName}</span>
+          <b>{formatCurrency(activeRow.target)} target</b>
+          <b>{formatCurrency(activeRow.recovered)} achieved</b>
+        </div>
         <table className="pie-table">
           <thead>
             <tr>
