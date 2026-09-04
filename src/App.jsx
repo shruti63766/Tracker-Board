@@ -750,8 +750,12 @@ export default function App() {
       flash("PIN must be exactly 4 digits.");
       return;
     }
-    if (state.employees.some((employee) => employee.id.toLowerCase() === employeeForm.id.trim().toLowerCase())) {
-      flash("Employee ID already exists.");
+    if (
+      state.employees.some(
+        (employee) => employee.active && employee.id.toLowerCase() === employeeForm.id.trim().toLowerCase()
+      )
+    ) {
+      flash("An active employee with this ID already exists.");
       return;
     }
 
@@ -765,7 +769,7 @@ export default function App() {
       });
 
       if (error || !data) {
-        flash("Employee ID already exists or details are invalid.");
+        flash("An active employee with this ID already exists, or details are invalid.");
         return;
       }
 
@@ -1501,6 +1505,8 @@ function TeamChart({ rows }) {
 }
 
 function EmployeePieChart({ rows }) {
+  const [activeId, setActiveId] = useState(rows[0]?.id || null);
+
   if (rows.length === 0) {
     return <p className="empty-state">No employees yet.</p>;
   }
@@ -1508,23 +1514,70 @@ function EmployeePieChart({ rows }) {
   const colors = ["#7ee0c5", "#f2bf57", "#8ca5ff", "#ff8f70", "#b6e66a", "#d28cff", "#69c7ff", "#ff7ea8"];
   const totalTarget = rows.reduce((sum, row) => sum + row.target, 0);
   const fallbackShare = 100 / rows.length;
-  let cursor = 0;
-  const segments = rows.map((row, index) => {
-    const share = totalTarget > 0 ? (row.target / totalTarget) * 100 : fallbackShare;
-    const start = cursor;
-    cursor += share;
-    return `${colors[index % colors.length]} ${start}% ${cursor}%`;
-  });
+  const activeRow = rows.find((row) => row.id === activeId) || rows[0];
+  const slices = buildPieSlices(rows, totalTarget, fallbackShare);
 
   return (
     <div className="employee-pie-layout">
-      <div className="employee-pie" style={{ background: `conic-gradient(${segments.join(", ")})` }}>
-        <span>{rows.length}</span>
-        <small>employees</small>
-      </div>
+      <figure className="employee-pie-card">
+        <svg className="employee-pie-svg" viewBox="0 0 220 220" role="img" aria-label="Employee target share pie">
+          {slices.map((slice, index) =>
+            slice.fullCircle ? (
+              <circle
+                className={`pie-slice ${activeRow.id === slice.row.id ? "active" : ""}`}
+                key={slice.row.id}
+                cx="110"
+                cy="110"
+                r="96"
+                fill={colors[index % colors.length]}
+                onMouseEnter={() => setActiveId(slice.row.id)}
+                onFocus={() => setActiveId(slice.row.id)}
+                tabIndex="0"
+              >
+                <title>{pieTitle(slice.row)}</title>
+              </circle>
+            ) : (
+              <path
+                className={`pie-slice ${activeRow.id === slice.row.id ? "active" : ""}`}
+                key={slice.row.id}
+                d={slice.path}
+                fill={colors[index % colors.length]}
+                onMouseEnter={() => setActiveId(slice.row.id)}
+                onFocus={() => setActiveId(slice.row.id)}
+                tabIndex="0"
+              >
+                <title>{pieTitle(slice.row)}</title>
+              </path>
+            )
+          )}
+          <circle cx="110" cy="110" r="52" className="pie-hole" />
+          <text x="110" y="102" textAnchor="middle" className="pie-center-main">
+            {activeRow.progress.toFixed(1)}%
+          </text>
+          <text x="110" y="124" textAnchor="middle" className="pie-center-sub">
+            achieved
+          </text>
+        </svg>
+        <figcaption className="pie-focus-card">
+          <strong>{activeRow.name}</strong>
+          <span>{activeRow.targetName}</span>
+          <div>
+            <b>{formatCurrency(activeRow.target)}</b>
+            <small>Target</small>
+          </div>
+          <div>
+            <b>{formatCurrency(activeRow.recovered)}</b>
+            <small>Achieved</small>
+          </div>
+        </figcaption>
+      </figure>
       <div className="pie-legend">
         {rows.map((row, index) => (
-          <article className="pie-item" key={row.id}>
+          <article
+            className={`pie-item ${activeRow.id === row.id ? "active" : ""}`}
+            key={row.id}
+            onMouseEnter={() => setActiveId(row.id)}
+          >
             <span className="pie-swatch" style={{ background: colors[index % colors.length] }} />
             <div>
               <strong>{row.name}</strong>
@@ -1547,6 +1600,52 @@ function EmployeePieChart({ rows }) {
       </div>
     </div>
   );
+}
+
+function pieTitle(row) {
+  return `${row.name} | ${row.targetName} | Target ${formatCurrency(row.target)} | Achieved ${formatCurrency(
+    row.recovered
+  )} | ${row.progress.toFixed(1)}% complete`;
+}
+
+function buildPieSlices(rows, totalTarget, fallbackShare) {
+  let cursor = -90;
+  return rows.map((row) => {
+    const share = totalTarget > 0 ? (row.target / totalTarget) * 100 : fallbackShare;
+    if (share >= 99.999) {
+      return { row, fullCircle: true };
+    }
+
+    const startAngle = cursor;
+    const endAngle = cursor + share * 3.6;
+    cursor = endAngle;
+    return {
+      row,
+      fullCircle: false,
+      path: describePieSlice(110, 110, 96, startAngle, endAngle),
+    };
+  });
+}
+
+function describePieSlice(cx, cy, radius, startAngle, endAngle) {
+  const start = polarToCartesian(cx, cy, radius, endAngle);
+  const end = polarToCartesian(cx, cy, radius, startAngle);
+  const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
+
+  return [
+    `M ${cx} ${cy}`,
+    `L ${start.x} ${start.y}`,
+    `A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`,
+    "Z",
+  ].join(" ");
+}
+
+function polarToCartesian(cx, cy, radius, angleInDegrees) {
+  const angleInRadians = (angleInDegrees * Math.PI) / 180;
+  return {
+    x: cx + radius * Math.cos(angleInRadians),
+    y: cy + radius * Math.sin(angleInRadians),
+  };
 }
 
 function PerformanceBars({ rows }) {

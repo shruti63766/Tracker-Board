@@ -496,46 +496,77 @@ input::placeholder {
   gap: 22px;
 }
 
-.employee-pie {
+.employee-pie-card {
   position: sticky;
   top: 96px;
   display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.employee-pie-svg {
   width: min(100%, 260px);
   aspect-ratio: 1;
-  place-items: center;
-  border-radius: 50%;
-  box-shadow:
-    inset 0 0 0 1px rgba(155, 180, 169, 0.18),
-    0 20px 48px rgba(0, 0, 0, 0.24);
+  overflow: visible;
+  filter: drop-shadow(0 20px 48px rgba(0, 0, 0, 0.24));
 }
 
-.employee-pie::after {
-  position: absolute;
-  inset: 27%;
-  border-radius: 50%;
-  background: #0e1918;
-  box-shadow: inset 0 0 0 1px rgba(155, 180, 169, 0.14);
-  content: "";
+.pie-slice {
+  cursor: pointer;
+  outline: none;
+  stroke: #0e1918;
+  stroke-width: 2;
+  transition:
+    filter 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+  transform-origin: 110px 110px;
 }
 
-.employee-pie span,
-.employee-pie small {
-  position: relative;
-  z-index: 1;
-  grid-area: 1 / 1;
+.pie-slice:hover,
+.pie-slice:focus,
+.pie-slice.active {
+  filter: brightness(1.09);
+  opacity: 1;
+  transform: scale(1.025);
 }
 
-.employee-pie span {
-  margin-top: -18px;
-  color: #f7fffb;
-  font-size: 2rem;
+.pie-hole {
+  fill: #0e1918;
+  stroke: rgba(155, 180, 169, 0.14);
+}
+
+.pie-center-main {
+  fill: #f7fffb;
+  font-size: 1.35rem;
   font-weight: 950;
 }
 
-.employee-pie small {
-  margin-top: 32px;
-  color: #91a49b;
+.pie-center-sub {
+  fill: #91a49b;
+  font-size: 0.62rem;
   font-weight: 900;
+  text-transform: uppercase;
+}
+
+.pie-focus-card {
+  display: grid;
+  width: min(100%, 260px);
+  gap: 6px;
+  padding: 13px;
+  border: 1px solid rgba(155, 180, 169, 0.14);
+  border-radius: 8px;
+  background: #0a1514;
+}
+
+.pie-focus-card span,
+.pie-focus-card small {
+  color: #91a49b;
+  font-weight: 800;
+}
+
+.pie-focus-card b {
+  color: #f7fffb;
 }
 
 .pie-legend {
@@ -552,6 +583,11 @@ input::placeholder {
   border: 1px solid rgba(155, 180, 169, 0.14);
   border-radius: 8px;
   background: #0a1514;
+}
+
+.pie-item.active {
+  border-color: rgba(126, 224, 197, 0.5);
+  background: #0d1b19;
 }
 
 .pie-swatch {
@@ -930,9 +966,12 @@ tr:last-child td {
   }
 
   .donut,
-  .employee-pie {
+  .employee-pie-svg {
     width: 150px;
     height: 150px;
+  }
+
+  .employee-pie-card {
     position: static;
   }
 
