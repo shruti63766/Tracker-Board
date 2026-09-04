@@ -569,46 +569,48 @@ input::placeholder {
   color: #f7fffb;
 }
 
-.pie-legend {
-  display: grid;
-  gap: 10px;
-}
-
-.pie-item {
-  display: grid;
-  grid-template-columns: auto minmax(150px, 1fr) repeat(3, minmax(110px, auto));
-  align-items: center;
-  gap: 12px;
-  padding: 13px;
+.pie-table-wrap {
+  max-height: 340px;
+  overflow: auto;
   border: 1px solid rgba(155, 180, 169, 0.14);
   border-radius: 8px;
   background: #0a1514;
 }
 
-.pie-item.active {
-  border-color: rgba(126, 224, 197, 0.5);
+.pie-table {
+  min-width: 720px;
+}
+
+.pie-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.pie-table tr.active td,
+.pie-table tbody tr:hover td {
   background: #0d1b19;
 }
 
-.pie-swatch {
-  width: 12px;
-  height: 42px;
-  border-radius: 999px;
-}
-
-.pie-item div,
-.pie-values {
+.pie-table td:first-child {
   display: grid;
-  gap: 3px;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 2px 9px;
 }
 
-.pie-item span,
-.pie-values span {
+.pie-table td:first-child small {
+  grid-column: 2;
   color: #91a49b;
+  font-size: 0.76rem;
+  font-weight: 800;
 }
 
-.pie-values b {
-  color: #f7fffb;
+.pie-dot {
+  grid-row: span 2;
+  width: 10px;
+  height: 28px;
+  border-radius: 999px;
 }
 
 .personal-band {
@@ -960,8 +962,7 @@ tr:last-child td {
 
   .team-chart,
   .bar-row,
-  .employee-pie-layout,
-  .pie-item {
+  .employee-pie-layout {
     grid-template-columns: 1fr;
   }
 

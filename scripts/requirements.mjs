@@ -137,7 +137,7 @@ await run("supports admin and employee views", async (page) => {
   await expectVisible(page, page.getByText("Manager view"), "admin manager view missing");
   await expectVisible(page, page.getByText("Admin dashboard"), "admin dashboard missing");
   await expectVisible(page, page.getByText("Employee target pie"), "admin employee pie missing");
-  await expectVisible(page, page.locator(".pie-item").first().getByText("Achieved"), "achieved amount label missing");
+  await expectVisible(page, page.locator(".pie-table").getByText("Achieved"), "achieved amount label missing");
   await expectHidden(page, page.getByText(/\/20 logins/), "login capacity label is visible");
   await signOut(page);
   await signIn(page, "EMP101", "1111");

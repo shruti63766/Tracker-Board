@@ -1571,32 +1571,37 @@ function EmployeePieChart({ rows }) {
           </div>
         </figcaption>
       </figure>
-      <div className="pie-legend">
-        {rows.map((row, index) => (
-          <article
-            className={`pie-item ${activeRow.id === row.id ? "active" : ""}`}
-            key={row.id}
-            onMouseEnter={() => setActiveId(row.id)}
-          >
-            <span className="pie-swatch" style={{ background: colors[index % colors.length] }} />
-            <div>
-              <strong>{row.name}</strong>
-              <span>{row.targetName}</span>
-            </div>
-            <div className="pie-values">
-              <b>{formatCurrency(row.target)}</b>
-              <span>Target</span>
-            </div>
-            <div className="pie-values">
-              <b>{formatCurrency(row.recovered)}</b>
-              <span>Achieved</span>
-            </div>
-            <div className="pie-values">
-              <b>{row.progress.toFixed(1)}%</b>
-              <span>Done</span>
-            </div>
-          </article>
-        ))}
+      <div className="pie-table-wrap" aria-label="Employee pie details">
+        <table className="pie-table">
+          <thead>
+            <tr>
+              <th>Employee</th>
+              <th>Target name</th>
+              <th>Target</th>
+              <th>Achieved</th>
+              <th>Done</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr
+                className={activeRow.id === row.id ? "active" : ""}
+                key={row.id}
+                onMouseEnter={() => setActiveId(row.id)}
+              >
+                <td>
+                  <span className="pie-dot" style={{ background: colors[index % colors.length] }} />
+                  <strong>{row.name}</strong>
+                  <small>{row.id}</small>
+                </td>
+                <td>{row.targetName}</td>
+                <td>{formatCurrency(row.target)}</td>
+                <td>{formatCurrency(row.recovered)}</td>
+                <td>{row.progress.toFixed(1)}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
