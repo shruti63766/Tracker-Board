@@ -468,7 +468,11 @@ export default function App() {
       });
       const employee = data?.[0];
 
-      if (error || !employee) {
+      if (error) {
+        flash("Could not connect to the login service. Please try again or check the Supabase configuration.");
+        return;
+      }
+      if (!employee) {
         flash("Invalid employee ID or PIN.");
         return;
       }
