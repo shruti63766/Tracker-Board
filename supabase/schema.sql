@@ -147,7 +147,6 @@ create table public.monthly_targets (
   created_by uuid references public.profiles(id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (employee_id, target_month),
   constraint target_name_not_blank check (length(trim(target_name)) > 0),
   constraint target_month_starts_on_first check (extract(day from target_month) = 1)
 );
@@ -177,7 +176,12 @@ select
     else round((coalesce(sum(r.amount), 0) / t.amount) * 100, 2)
   end as progress_percent
 from public.profiles p
-left join public.monthly_targets t on t.employee_id = p.id
+left join (
+  select employee_id, target_month, string_agg(target_name, ' + ' order by created_at, id) as target_name,
+    sum(amount) as amount
+  from public.monthly_targets
+  group by employee_id, target_month
+) t on t.employee_id = p.id
 left join public.recovery_entries r
   on r.employee_id = p.id
   and date_trunc('month', r.recovery_date)::date = t.target_month
@@ -361,6 +365,7 @@ as $$
   ),
   target_rows as (
     select
+      t.id,
       p.employee_code as employee_id,
       to_char(t.target_month, 'YYYY-MM') as month,
       t.target_name as name,
@@ -392,6 +397,7 @@ as $$
     ), '[]'::jsonb),
     'targets', coalesce((
       select jsonb_agg(jsonb_build_object(
+        'id', id,
         'employeeId', employee_id,
         'month', month,
         'name', name,
@@ -529,7 +535,8 @@ begin
 end;
 $$;
 
-create or replace function public.app_upsert_target(
+create or replace function public.app_save_target(
+  target_id_input uuid,
   admin_code_input text,
   admin_pin text,
   employee_code_input text,
@@ -556,7 +563,10 @@ begin
     return false;
   end if;
 
-  if employee_code_input !~ '^[A-Za-z0-9]{3,20}$'
+  if target_id_input is null or employee_code_input is null or month_input is null
+    or target_name_input is null or target_amount is null
+    or target_amount > 999999999999
+    or employee_code_input !~ '^[A-Za-z0-9]{3,20}$'
     or month_input !~ '^\d{4}-\d{2}$'
     or length(trim(target_name_input)) = 0
     or target_amount < 0
@@ -576,16 +586,17 @@ begin
     return false;
   end if;
 
-  insert into public.monthly_targets (employee_id, target_month, target_name, amount, created_by, updated_at)
-  values (target_employee_id, target_month_date, trim(target_name_input), target_amount, admin_profile.profile_id, now())
-  on conflict (employee_id, target_month)
+  insert into public.monthly_targets (id, employee_id, target_month, target_name, amount, created_by, updated_at)
+  values (target_id_input, target_employee_id, target_month_date, trim(target_name_input), target_amount, admin_profile.profile_id, now())
+  on conflict (id)
   do update set
     target_name = excluded.target_name,
     amount = excluded.amount,
-    created_by = excluded.created_by,
-    updated_at = now();
+    updated_at = now()
+  where monthly_targets.employee_id = target_employee_id
+    and monthly_targets.target_month = target_month_date;
 
-  return true;
+  return found;
 end;
 $$;
 
@@ -696,7 +707,7 @@ grant execute on function public.app_snapshot() to anon, authenticated;
 grant execute on function public.app_create_employee(text, text, text, text, text) to anon, authenticated;
 grant execute on function public.app_admin_reset_pin(text, text, text, text) to anon, authenticated;
 grant execute on function public.app_delete_employee(text, text, text) to anon, authenticated;
-grant execute on function public.app_upsert_target(text, text, text, text, text, numeric) to anon, authenticated;
+grant execute on function public.app_save_target(uuid, text, text, text, text, text, numeric) to anon, authenticated;
 grant execute on function public.app_add_recovery(text, text, date, numeric) to anon, authenticated;
 grant execute on function public.app_update_recovery(text, text, uuid, date, numeric) to anon, authenticated;
 grant execute on function public.app_delete_recovery(text, text, uuid) to anon, authenticated;

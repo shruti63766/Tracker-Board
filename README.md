@@ -52,3 +52,9 @@ Admin employee delete should use a double-confirmation UI and then deactivate th
 2. Import the repo in Vercel.
 3. Add the same Supabase environment variables in Vercel project settings.
 4. Deploy.
+
+## Multiple monthly targets
+
+Admins (including the branch manager account) can use **Add target** beside a member to assign additional named targets for the selected month. Each target has its own Save button. Existing targets remain editable, including their names. Employee progress, charts, leaderboard and summary exports use the sum of the member's monthly targets; recovery entries count once against that total. Excel also includes a Targets sheet with individual assignments.
+
+For an existing Supabase installation, run `supabase/multiple-targets.sql` in the SQL editor **before deploying the updated frontend**. This preserves existing records, removes the one-target-per-month constraint, updates the snapshot and progress view, and installs the ID-based save RPC. The previous frontend's target-save RPC is retired, so deploy the frontend immediately afterward. New installations use the updated `supabase/schema.sql`.

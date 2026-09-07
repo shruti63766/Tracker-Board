@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   CalendarDays,
@@ -242,7 +242,8 @@ function loadState() {
   if (!raw) return emptyState;
 
   try {
-    return JSON.parse(raw);
+    const saved = JSON.parse(raw);
+    return { ...saved, targets: (saved.targets || []).map((target) => ({ ...target, id: target.id || crypto.randomUUID() })) };
   } catch {
     return emptyState;
   }
@@ -273,17 +274,17 @@ function buildRows(state, month) {
 
   return employees
     .map((employee) => {
-      const targetRecord = state.targets.find(
+      const targets = state.targets.filter(
         (item) => item.employeeId === employee.id && item.month === month
       );
-      const target = targetRecord?.amount || 0;
-      const targetName = targetRecord?.name || "Monthly target";
+      const target = targets.reduce((sum, item) => sum + Number(item.amount), 0);
+      const targetName = targets.map((item) => item.name || "Monthly target").join(" + ") || "Monthly target";
       const recovered = state.recoveries
         .filter((item) => item.employeeId === employee.id && getMonthFromDate(item.date) === month)
         .reduce((sum, item) => sum + Number(item.amount), 0);
       const progress = target > 0 ? clampProgress((recovered / target) * 100) : 0;
 
-      return { ...employee, target, targetName, recovered, progress };
+      return { ...employee, targets, target, targetName, recovered, progress };
     })
     .sort((a, b) => b.progress - a.progress || b.recovered - a.recovered);
 }
@@ -307,6 +308,7 @@ export default function App() {
   const [editingEntryId, setEditingEntryId] = useState(null);
   const [employeeForm, setEmployeeForm] = useState({ id: "", name: "", pin: "" });
   const [targetDrafts, setTargetDrafts] = useState({});
+  const targetDraftScope = useRef(null);
   const [deleteCandidate, setDeleteCandidate] = useState(null);
   const [notice, setNotice] = useState("");
   const [isLoading, setIsLoading] = useState(USE_SUPABASE);
@@ -374,18 +376,15 @@ export default function App() {
       };
 
   useEffect(() => {
-    setTargetDrafts(
-      Object.fromEntries(
-        rows.map((row) => [
-          row.id,
-          {
-            amount: String(row.target || ""),
-            name: row.targetName || "Monthly target",
-          },
-        ])
-      )
-    );
-  }, [selectedMonth, state.targets, state.employees]);
+    const scope = `${selectedMonth}:${currentUser?.id || ""}`;
+    const preserve = targetDraftScope.current === scope;
+    targetDraftScope.current = scope;
+    setTargetDrafts((current) => Object.fromEntries(rows.map((row) => [row.id,
+      preserve && current[row.id] ? current[row.id] : row.targets.length
+        ? row.targets.map((target) => ({ ...target, amount: String(target.amount) }))
+        : [{ id: crypto.randomUUID(), name: "Monthly target", amount: "" }],
+    ])));
+  }, [selectedMonth, state.targets, state.employees, currentUser?.id]);
 
   function flash(message) {
     setNotice(message);
@@ -555,8 +554,10 @@ export default function App() {
     flash("PIN reset. Sign in with your new PIN.");
   }
 
-  async function saveTarget(employeeId) {
-    const draft = targetDrafts[employeeId] || { amount: "0", name: "" };
+  async function saveTarget(employeeId, targetId) {
+    if (!isAdmin) return;
+    const draft = targetDrafts[employeeId]?.find((item) => item.id === targetId);
+    if (!draft) return;
     const amount = draft.amount || "0";
     const name = draft.name.trim();
     const numericAmount = Number(amount);
@@ -564,13 +565,14 @@ export default function App() {
       flash("Target name is required.");
       return;
     }
-    if (!Number.isFinite(numericAmount) || numericAmount < 0 || !/^\d+$/.test(String(amount))) {
+    if (!Number.isFinite(numericAmount) || numericAmount < 0 || numericAmount > 999999999999 || !/^\d+$/.test(String(amount))) {
       flash("Target must be a whole number.");
       return;
     }
 
     if (USE_SUPABASE) {
-      const { data, error } = await supabase.rpc("app_upsert_target", {
+      const { data, error } = await supabase.rpc("app_save_target", {
+        target_id_input: targetId,
         admin_code_input: currentUser.id,
         admin_pin: session.pin,
         employee_code_input: employeeId,
@@ -591,18 +593,18 @@ export default function App() {
 
     setState((current) => {
       const existing = current.targets.some(
-        (item) => item.employeeId === employeeId && item.month === selectedMonth
+        (item) => item.id === targetId
       );
 
       return {
         ...current,
         targets: existing
           ? current.targets.map((item) =>
-              item.employeeId === employeeId && item.month === selectedMonth
+              item.id === targetId
                 ? { ...item, name, amount: numericAmount }
                 : item
             )
-          : [...current.targets, { employeeId, month: selectedMonth, name, amount: numericAmount }],
+          : [...current.targets, { id: targetId, employeeId, month: selectedMonth, name, amount: numericAmount }],
       };
     });
     flash("Target saved.");
@@ -911,6 +913,11 @@ export default function App() {
             Number(row.progress.toFixed(2)),
           ]),
         ],
+      },
+      {
+        name: "Targets",
+        rows: [["Employee ID", "Name", "Month", "Target Name", "Target"],
+          ...rows.flatMap((row) => row.targets.map((target) => [row.id, row.name, selectedMonth, target.name, Number(target.amount)]))],
       },
       {
         name: "Detailed Entries",
@@ -1353,6 +1360,7 @@ function AdminDashboard({ rows, selectedMonth, targetDrafts, onTargetDraftChange
           <div>
             <p className="eyebrow">Target planning</p>
             <h2>Set target names and amounts</h2>
+            <p>Add multiple targets per employee. Monthly progress uses their combined amount.</p>
           </div>
         </div>
         <ProgressTable
@@ -1836,48 +1844,35 @@ function ProgressTable({
                 <strong>{row.name}</strong>
                 <span>{row.id}</span>
               </td>
-              <td>
-                {allowTargetEdit ? (
-                  <input
-                    className="target-name-input"
-                    value={targetDrafts[row.id]?.name ?? ""}
-                    onChange={(event) =>
-                      onTargetDraftChange((current) => ({
-                        ...current,
-                        [row.id]: {
-                          amount: current[row.id]?.amount ?? String(row.target || ""),
-                          name: event.target.value,
-                        },
-                      }))
-                    }
-                    aria-label={`Target name for ${row.name}`}
-                    placeholder="Loan Recovery"
-                  />
-                ) : (
-                  <span className="target-name">{row.targetName}</span>
-                )}
-              </td>
-              <td>
-                {allowTargetEdit ? (
-                  <input
-                    className="table-input"
-                    value={targetDrafts[row.id]?.amount ?? ""}
-                    onChange={(event) =>
-                      onTargetDraftChange((current) => ({
-                        ...current,
-                        [row.id]: {
-                          name: current[row.id]?.name ?? row.targetName ?? "Monthly target",
-                          amount: event.target.value.replace(/\D/g, ""),
-                        },
-                      }))
-                    }
-                    inputMode="numeric"
-                    aria-label={`Target for ${row.name}`}
-                  />
-                ) : (
-                  formatCurrency(row.target)
-                )}
-              </td>
+              {allowTargetEdit ? (
+                <td colSpan={2}>
+                  <div className="stack">
+                    {(targetDrafts[row.id] || []).map((draft, index) => (
+                      <div className="row-actions" key={draft.id}>
+                        <input className="target-name-input" value={draft.name}
+                          aria-label={`Target name for ${row.name}${index ? ` ${index + 1}` : ""}`}
+                          placeholder="Loan Recovery"
+                          onChange={(event) => onTargetDraftChange((current) => ({ ...current,
+                            [row.id]: current[row.id].map((item) => item.id === draft.id ? { ...item, name: event.target.value } : item),
+                          }))} />
+                        <input className="table-input" value={draft.amount} inputMode="numeric"
+                          aria-label={`Target for ${row.name}${index ? ` ${index + 1}` : ""}`}
+                          onChange={(event) => onTargetDraftChange((current) => ({ ...current,
+                            [row.id]: current[row.id].map((item) => item.id === draft.id ? { ...item, amount: event.target.value.replace(/\D/g, "") } : item),
+                          }))} />
+                        <button className="mini-button" type="button" onClick={() => onSaveTarget(row.id, draft.id)}>
+                          <Save size={16} aria-hidden="true" />Save
+                        </button>
+                      </div>
+                    ))}
+                    <span>Total: {formatCurrency(row.target)}</span>
+                  </div>
+                </td>
+              ) : (
+                <><td><div className="stack">{row.targets.map((target) => (
+                  <span className="target-name" key={target.id}>{target.name}: {formatCurrency(target.amount)}</span>
+                ))}{!row.targets.length && "No targets assigned"}</div></td><td>{formatCurrency(row.target)}</td></>
+              )}
               <td>{formatCurrency(row.recovered)}</td>
               <td>
                 <div className="progress-cell">
@@ -1888,9 +1883,10 @@ function ProgressTable({
               {allowTargetEdit && (
                 <td>
                   <div className="row-actions">
-                    <button className="mini-button" type="button" onClick={() => onSaveTarget(row.id)}>
-                      <Save size={16} aria-hidden="true" />
-                      Save
+                    <button className="mini-button" type="button" onClick={() => onTargetDraftChange((current) => ({
+                      ...current, [row.id]: [...(current[row.id] || []), { id: crypto.randomUUID(), name: "", amount: "" }],
+                    }))}>
+                      <Plus size={16} aria-hidden="true" />Add target
                     </button>
                   </div>
                 </td>

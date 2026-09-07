@@ -257,12 +257,18 @@ await run("PIN reset requires old PIN and admin can reset forgotten employee PIN
   await expectVisible(page, page.getByText("Employee view"), "admin-reset PIN did not work");
 });
 
-await run("admin XLSX export starts a two-sheet workbook download", async (page) => {
+await run("admin XLSX export includes individual targets", async (page) => {
   await seedDemoState(page);
   await signIn(page);
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export XLSX" }).click();
   const download = await downloadPromise;
+  const chunks = [];
+  for await (const chunk of await download.createReadStream()) chunks.push(chunk);
+  const workbook = Buffer.concat(chunks).toString("utf8");
+  if (!workbook.includes('name="Targets"') || !workbook.includes('name="Detailed Entries"')) {
+    throw new Error("workbook is missing target details or recovery entries");
+  }
   if (!download.suggestedFilename().startsWith("trackboard-") || !download.suggestedFilename().endsWith(".xlsx")) {
     throw new Error(`unexpected XLSX filename ${download.suggestedFilename()}`);
   }
@@ -284,6 +290,31 @@ await run("admin delete uses confirmation and deactivates employee", async (page
   await signOut(page);
   await signIn(page, "EMP101", "1111");
   await expectVisible(page, page.getByText("Invalid employee ID or PIN."), "deleted employee can still login");
+});
+
+await run("multiple targets persist independently and aggregate once", async (page) => {
+  await seedDemoState(page);
+  await signIn(page);
+  const row = page.locator("tbody tr", { has: page.getByLabel("Target for Aarav Sharma", { exact: true }) });
+  await row.getByRole("button", { name: "Add target" }).click();
+  await row.getByLabel("Target name for Aarav Sharma 2", { exact: true }).fill("Deposits");
+  await row.getByLabel("Target for Aarav Sharma 2", { exact: true }).fill("500000");
+  await row.getByRole("button", { name: "Save", exact: true }).nth(1).click();
+  await expectVisible(page, page.getByText("Target saved."), "additional target save failed");
+  const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)), storageKey);
+  const targets = stored.targets.filter((target) => target.employeeId === "EMP101" && target.month === "2026-09");
+  if (targets.length !== 2 || targets.reduce((sum, t) => sum + t.amount, 0) !== 1000000) throw new Error("targets overwritten or incorrect total");
+  await row.getByLabel("Target name for Aarav Sharma 2", { exact: true }).fill("Savings");
+  await row.getByLabel("Target for Aarav Sharma 2", { exact: true }).fill("1500000");
+  await row.getByRole("button", { name: "Save", exact: true }).nth(1).click();
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await signIn(page, "EMP101", "1111");
+  await expectVisible(page, page.getByText("5.0%", { exact: true }), "combined progress incorrect");
+  await expectVisible(page, page.getByText(/^Savings:/), "individual target missing for member");
+  await expectHidden(page, page.getByRole("button", { name: "Add target" }), "employee can assign targets");
+  const persisted = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)).targets, storageKey);
+  const own = persisted.filter((target) => target.employeeId === "EMP101");
+  if (own.length !== 2 || own[0].amount !== 500000 || own[1].name !== "Savings") throw new Error("editing one target changed another");
 });
 
 await browser.close();
