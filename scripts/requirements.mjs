@@ -317,6 +317,30 @@ await run("multiple targets persist independently and aggregate once", async (pa
   if (own.length !== 2 || own[0].amount !== 500000 || own[1].name !== "Savings") throw new Error("editing one target changed another");
 });
 
+await run("manager removes mistaken target rows and confirms saved target deletion", async (page) => {
+  await seedDemoState(page);
+  await signIn(page);
+  const row = page.locator("tbody tr").filter({ has: page.getByRole("button", { name: "Delete target 1 for Aarav Sharma", exact: true }) });
+  await row.getByRole("button", { name: "Edit", exact: true }).click();
+  if (!await row.getByLabel("Target name for Aarav Sharma", { exact: true }).evaluate((input) => input === document.activeElement)) throw new Error("Edit did not focus target");
+  await row.getByRole("button", { name: "Add target" }).click();
+  await row.getByRole("button", { name: "Delete target 2 for Aarav Sharma", exact: true }).click();
+  if (await row.getByRole("button", { name: /^Delete target/ }).count() !== 1) throw new Error("draft row remained");
+  if ((await getStoredState(page)).targets.length !== 4) throw new Error("draft deletion changed saved targets");
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await row.getByRole("button", { name: "Delete target 1 for Aarav Sharma", exact: true }).click();
+  if ((await getStoredState(page)).targets.length !== 4) throw new Error("cancel deleted target");
+  page.once("dialog", (dialog) => dialog.accept());
+  await row.getByRole("button", { name: "Delete target 1 for Aarav Sharma", exact: true }).click();
+  await expectVisible(page, page.getByText("Target deleted.", { exact: true }), "delete failed");
+  const state = await getStoredState(page);
+  if (state.targets.length !== 3 || state.targets.some((target) => target.employeeId === "EMP101") || state.recoveries.length !== 4) throw new Error("deletion affected unrelated records");
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await signIn(page, "EMP101", "1111");
+  await expectVisible(page, page.getByText("No targets assigned"), "deleted target returned");
+  await expectHidden(page, page.getByRole("button", { name: /^Delete target/ }), "employee can delete targets");
+});
+
 await browser.close();
 
 if (failures.length > 0) {

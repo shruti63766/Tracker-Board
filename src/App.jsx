@@ -610,6 +610,34 @@ export default function App() {
     flash("Target saved.");
   }
 
+  async function deleteTarget(employeeId, targetId) {
+    if (!isAdmin) return;
+    const saved = state.targets.find((target) => target.id === targetId);
+    if (saved && !window.confirm(`Delete target "${saved.name}"? This cannot be undone.`)) return;
+
+    if (saved && USE_SUPABASE) {
+      try {
+        const { data, error } = await supabase.rpc("app_delete_target", {
+          target_id_input: targetId,
+          admin_code_input: currentUser.id,
+          admin_pin: session.pin,
+        });
+        if (error || !data) throw error || new Error("Delete failed");
+      } catch {
+        flash("Target could not be deleted.");
+        return;
+      }
+    }
+
+    setTargetDrafts((current) => ({ ...current,
+      [employeeId]: (current[employeeId] || []).filter((target) => target.id !== targetId),
+    }));
+    setState((current) => ({ ...current,
+      targets: current.targets.filter((target) => target.id !== targetId),
+    }));
+    flash(saved ? "Target deleted." : "Target row removed.");
+  }
+
   async function addRecovery(event) {
     event.preventDefault();
     const amount = Number(entryForm.amount);
@@ -1214,6 +1242,7 @@ export default function App() {
           targetDrafts={targetDrafts}
           onTargetDraftChange={setTargetDrafts}
           onSaveTarget={saveTarget}
+          onDeleteTarget={deleteTarget}
           adminPinForm={adminPinForm}
           onAdminPinFormChange={setAdminPinForm}
           onAdminResetPin={adminResetPin}
@@ -1287,6 +1316,7 @@ function AdminView({
   targetDrafts,
   onTargetDraftChange,
   onSaveTarget,
+  onDeleteTarget,
   adminPinForm,
   onAdminPinFormChange,
   onAdminResetPin,
@@ -1322,6 +1352,7 @@ function AdminView({
           targetDrafts={targetDrafts}
           onTargetDraftChange={onTargetDraftChange}
           onSaveTarget={onSaveTarget}
+          onDeleteTarget={onDeleteTarget}
         />
       ) : (
         <EmployeeManagement
@@ -1339,7 +1370,7 @@ function AdminView({
   );
 }
 
-function AdminDashboard({ rows, selectedMonth, targetDrafts, onTargetDraftChange, onSaveTarget }) {
+function AdminDashboard({ rows, selectedMonth, targetDrafts, onTargetDraftChange, onSaveTarget, onDeleteTarget }) {
   return (
     <>
       <section className="overview-grid" aria-label="Graphical performance overview">
@@ -1360,7 +1391,7 @@ function AdminDashboard({ rows, selectedMonth, targetDrafts, onTargetDraftChange
           <div>
             <p className="eyebrow">Target planning</p>
             <h2>Set target names and amounts</h2>
-            <p>Add multiple targets per employee. Monthly progress uses their combined amount.</p>
+            <p>Add multiple targets per employee. Edit names and amounts, then Save. Delete removes a target row. Monthly progress uses their combined amount.</p>
           </div>
         </div>
         <ProgressTable
@@ -1369,6 +1400,7 @@ function AdminDashboard({ rows, selectedMonth, targetDrafts, onTargetDraftChange
           targetDrafts={targetDrafts}
           onTargetDraftChange={onTargetDraftChange}
           onSaveTarget={onSaveTarget}
+          onDeleteTarget={onDeleteTarget}
         />
       </section>
     </>
@@ -1822,6 +1854,7 @@ function ProgressTable({
   targetDrafts = {},
   onTargetDraftChange,
   onSaveTarget,
+  onDeleteTarget,
   onRequestDelete,
 }) {
   return (
@@ -1860,8 +1893,19 @@ function ProgressTable({
                           onChange={(event) => onTargetDraftChange((current) => ({ ...current,
                             [row.id]: current[row.id].map((item) => item.id === draft.id ? { ...item, amount: event.target.value.replace(/\D/g, "") } : item),
                           }))} />
+                        {row.targets.some((target) => target.id === draft.id) && (
+                          <button className="mini-button" type="button"
+                            onClick={(event) => event.currentTarget.parentElement.querySelector("input").focus()}>
+                            <Pencil size={16} aria-hidden="true" />Edit
+                          </button>
+                        )}
                         <button className="mini-button" type="button" onClick={() => onSaveTarget(row.id, draft.id)}>
                           <Save size={16} aria-hidden="true" />Save
+                        </button>
+                        <button className="mini-danger-button" type="button"
+                          aria-label={`Delete target ${index + 1} for ${row.name}`}
+                          onClick={() => onDeleteTarget(row.id, draft.id)}>
+                          <Trash2 size={16} aria-hidden="true" />Delete
                         </button>
                       </div>
                     ))}

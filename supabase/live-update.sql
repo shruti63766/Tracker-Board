@@ -333,6 +333,32 @@ begin
 end;
 $$;
 
+create or replace function public.app_delete_target(
+  target_id_input uuid,
+  admin_code_input text,
+  admin_pin text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not exists (
+    select 1 from public.app_verify_pin(admin_code_input, admin_pin)
+    where role = 'admin'
+  ) then
+    return false;
+  end if;
+
+  delete from public.monthly_targets where id = target_id_input;
+  return found;
+end;
+$$;
+
+revoke all on function public.app_delete_target(uuid, text, text) from public;
+grant execute on function public.app_delete_target(uuid, text, text) to anon, authenticated;
+
 create or replace function public.app_save_target(
   target_id_input uuid,
   admin_code_input text,
