@@ -13,16 +13,16 @@ const demoState = {
     { id: "EMP104", name: "Nisha Verma", role: "employee", pin: "4444", active: true },
   ],
   targets: [
-    { employeeId: "EMP101", month: "2026-09", name: "Loan Recovery", amount: 500000 },
-    { employeeId: "EMP102", month: "2026-09", name: "Loan Recovery", amount: 450000 },
-    { employeeId: "EMP103", month: "2026-09", name: "Loan Recovery", amount: 400000 },
-    { employeeId: "EMP104", month: "2026-09", name: "Loan Recovery", amount: 350000 },
+    { id: "t1", employeeId: "EMP101", month: "2026-09", name: "Loan Recovery", amount: 500000 },
+    { id: "t2", employeeId: "EMP102", month: "2026-09", name: "Loan Recovery", amount: 450000 },
+    { id: "t3", employeeId: "EMP103", month: "2026-09", name: "Loan Recovery", amount: 400000 },
+    { id: "t4", employeeId: "EMP104", month: "2026-09", name: "Loan Recovery", amount: 350000 },
   ],
   recoveries: [
-    { id: "r1", employeeId: "EMP101", date: "2026-09-04", amount: 100000 },
-    { id: "r2", employeeId: "EMP102", date: "2026-09-03", amount: 75000 },
-    { id: "r3", employeeId: "EMP103", date: "2026-09-02", amount: 125000 },
-    { id: "r4", employeeId: "EMP104", date: "2026-09-01", amount: 40000 },
+    { id: "r1", employeeId: "EMP101", targetId: "t1", date: "2026-09-04", amount: 100000 },
+    { id: "r2", employeeId: "EMP102", targetId: "t2", date: "2026-09-03", amount: 75000 },
+    { id: "r3", employeeId: "EMP103", targetId: "t3", date: "2026-09-02", amount: 125000 },
+    { id: "r4", employeeId: "EMP104", targetId: "t4", date: "2026-09-01", amount: 40000 },
   ],
 };
 
@@ -136,7 +136,7 @@ await run("supports admin and employee views", async (page) => {
   await signIn(page);
   await expectVisible(page, page.getByText("Manager view"), "admin manager view missing");
   await expectVisible(page, page.getByText("Admin dashboard"), "admin dashboard missing");
-  await expectVisible(page, page.getByText("Employee target pie"), "admin employee pie missing");
+  await expectVisible(page, page.getByText("Individual target pie"), "admin target pie missing");
   await expectVisible(page, page.locator(".pie-table").getByText("Achieved"), "achieved amount label missing");
   await expectHidden(page, page.getByText(/\/20 logins/), "login capacity label is visible");
   await signOut(page);
@@ -188,16 +188,17 @@ await run("employee entries accept numeric amounts and support edit/delete", asy
   await expectVisible(page, page.getByText("Entry saved."), "valid entry save notice missing");
   await expectVisible(page, page.getByText("26.0%").first(), "employee progress did not update");
 
-  const savedEntry = page.locator(".entry-row", { hasText: "₹30,000" });
+  const savedEntry = page.locator(".entry-row", { hasText: "30,000" });
   await savedEntry.getByRole("button", { name: "Edit" }).click();
   await page.getByPlaceholder("100000").fill("40000");
   await page.getByRole("button", { name: "Update entry" }).click();
   await expectVisible(page, page.getByText("Entry updated."), "entry update notice missing");
-  await expectVisible(page, page.locator(".entry-row", { hasText: "₹40,000" }), "updated entry amount missing");
+  await expectVisible(page, page.locator(".entry-row", { hasText: "40,000" }), "updated entry amount missing");
 
-  await page.locator(".entry-row", { hasText: "₹40,000" }).getByRole("button", { name: "Delete" }).click();
+  await page.locator(".entry-row", { hasText: "40,000" }).getByRole("button", { name: "Delete" }).click();
   await expectVisible(page, page.getByText("Entry deleted."), "entry delete notice missing");
-  await expectHidden(page, page.locator(".entry-row", { hasText: "₹40,000" }), "deleted entry still visible");
+  await expectHidden(page, page.locator(".entry-row", { hasText: "40,000" }), "deleted entry still visible");
+  if ((await page.locator("body").textContent()).includes("₹")) throw new Error("rupee symbol is still visible");
 });
 
 await run("employees can see team progress leaderboard", async (page) => {
@@ -292,7 +293,7 @@ await run("admin delete uses confirmation and deactivates employee", async (page
   await expectVisible(page, page.getByText("Invalid employee ID or PIN."), "deleted employee can still login");
 });
 
-await run("multiple targets persist independently and aggregate once", async (page) => {
+await run("multiple targets calculate progress independently", async (page) => {
   await seedDemoState(page);
   await signIn(page);
   const row = page.locator("tbody tr", { has: page.getByLabel("Target for Aarav Sharma", { exact: true }) });
@@ -309,8 +310,15 @@ await run("multiple targets persist independently and aggregate once", async (pa
   await row.getByRole("button", { name: "Save", exact: true }).nth(1).click();
   await page.reload({ waitUntil: "domcontentloaded" });
   await signIn(page, "EMP101", "1111");
-  await expectVisible(page, page.getByText("5.0%", { exact: true }), "combined progress incorrect");
-  await expectVisible(page, page.getByText(/^Savings:/), "individual target missing for member");
+  const loanRow = page.locator("tbody tr", { hasText: "Aarav Sharma" }).filter({ hasText: "Loan Recovery" });
+  const savingsRow = page.locator("tbody tr", { hasText: "Aarav Sharma" }).filter({ hasText: "Savings" });
+  await expectVisible(page, loanRow.getByText("20.0%", { exact: true }), "loan recovery progress is incorrect");
+  await expectVisible(page, savingsRow.getByText("0.0%", { exact: true }), "new target did not start separately");
+  await page.getByLabel("Target").selectOption({ label: "Savings" });
+  await page.getByPlaceholder("100000").fill("150000");
+  await page.getByRole("button", { name: "Save entry" }).click();
+  await expectVisible(page, savingsRow.getByText("10.0%", { exact: true }), "entry did not update its selected target");
+  await expectVisible(page, loanRow.getByText("20.0%", { exact: true }), "entry changed another target's progress");
   await expectHidden(page, page.getByRole("button", { name: "Add target" }), "employee can assign targets");
   const persisted = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)).targets, storageKey);
   const own = persisted.filter((target) => target.employeeId === "EMP101");
@@ -337,7 +345,7 @@ await run("manager removes mistaken target rows and confirms saved target deleti
   if (state.targets.length !== 3 || state.targets.some((target) => target.employeeId === "EMP101") || state.recoveries.length !== 4) throw new Error("deletion affected unrelated records");
   await page.reload({ waitUntil: "domcontentloaded" });
   await signIn(page, "EMP101", "1111");
-  await expectVisible(page, page.getByText("No targets assigned"), "deleted target returned");
+  await expectHidden(page, page.locator(".target-summary"), "deleted target returned in the employee summary");
   await expectHidden(page, page.getByRole("button", { name: /^Delete target/ }), "employee can delete targets");
 });
 

@@ -154,6 +154,7 @@ create table public.monthly_targets (
 create table public.recovery_entries (
   id uuid primary key default gen_random_uuid(),
   employee_id uuid not null references public.profiles(id) on delete cascade,
+  target_id uuid references public.monthly_targets(id) on delete set null,
   recovery_date date not null,
   amount numeric(12, 0) not null check (amount > 0),
   created_at timestamptz not null default now(),
@@ -167,6 +168,7 @@ select
   p.id as employee_id,
   p.employee_code,
   p.full_name,
+  t.id as target_id,
   t.target_month,
   coalesce(t.target_name, 'Monthly target') as target_name,
   coalesce(t.amount, 0) as target_amount,
@@ -176,17 +178,11 @@ select
     else round((coalesce(sum(r.amount), 0) / t.amount) * 100, 2)
   end as progress_percent
 from public.profiles p
-left join (
-  select employee_id, target_month, string_agg(target_name, ' + ' order by created_at, id) as target_name,
-    sum(amount) as amount
-  from public.monthly_targets
-  group by employee_id, target_month
-) t on t.employee_id = p.id
+left join public.monthly_targets t on t.employee_id = p.id
 left join public.recovery_entries r
-  on r.employee_id = p.id
-  and date_trunc('month', r.recovery_date)::date = t.target_month
+  on r.target_id = t.id
 where p.role = 'employee' and p.active = true
-group by p.id, p.employee_code, p.full_name, t.target_month, t.target_name, t.amount;
+group by p.id, p.employee_code, p.full_name, t.id, t.target_month, t.target_name, t.amount;
 
 create or replace function public.is_admin()
 returns boolean
@@ -378,6 +374,7 @@ as $$
     select
       r.id,
       p.employee_code as employee_id,
+      r.target_id,
       r.recovery_date as date,
       r.amount
     from public.recovery_entries r
@@ -409,6 +406,7 @@ as $$
       select jsonb_agg(jsonb_build_object(
         'id', id,
         'employeeId', employee_id,
+        'targetId', target_id,
         'date', date,
         'amount', amount
       ) order by date desc)
@@ -629,6 +627,7 @@ $$;
 create or replace function public.app_add_recovery(
   employee_code_input text,
   employee_pin text,
+  target_id_input uuid,
   recovery_date_input date,
   recovery_amount numeric
 )
@@ -652,8 +651,17 @@ begin
     return false;
   end if;
 
-  insert into public.recovery_entries (employee_id, recovery_date, amount)
-  values (employee_profile.profile_id, recovery_date_input, recovery_amount);
+  if not exists (
+    select 1 from public.monthly_targets
+    where id = target_id_input
+      and employee_id = employee_profile.profile_id
+      and target_month = date_trunc('month', recovery_date_input)::date
+  ) then
+    return false;
+  end if;
+
+  insert into public.recovery_entries (employee_id, target_id, recovery_date, amount)
+  values (employee_profile.profile_id, target_id_input, recovery_date_input, recovery_amount);
 
   return true;
 end;
@@ -663,6 +671,7 @@ create or replace function public.app_update_recovery(
   employee_code_input text,
   employee_pin text,
   entry_id_input uuid,
+  target_id_input uuid,
   recovery_date_input date,
   recovery_amount numeric
 )
@@ -686,8 +695,18 @@ begin
     return false;
   end if;
 
+  if not exists (
+    select 1 from public.monthly_targets
+    where id = target_id_input
+      and employee_id = employee_profile.profile_id
+      and target_month = date_trunc('month', recovery_date_input)::date
+  ) then
+    return false;
+  end if;
+
   update public.recovery_entries
-  set recovery_date = recovery_date_input,
+  set target_id = target_id_input,
+      recovery_date = recovery_date_input,
       amount = recovery_amount
   where id = entry_id_input
     and employee_id = employee_profile.profile_id;
@@ -734,7 +753,7 @@ grant execute on function public.app_create_employee(text, text, text, text, tex
 grant execute on function public.app_admin_reset_pin(text, text, text, text) to anon, authenticated;
 grant execute on function public.app_delete_employee(text, text, text) to anon, authenticated;
 grant execute on function public.app_save_target(uuid, text, text, text, text, text, numeric) to anon, authenticated;
-grant execute on function public.app_add_recovery(text, text, date, numeric) to anon, authenticated;
-grant execute on function public.app_update_recovery(text, text, uuid, date, numeric) to anon, authenticated;
+grant execute on function public.app_add_recovery(text, text, uuid, date, numeric) to anon, authenticated;
+grant execute on function public.app_update_recovery(text, text, uuid, uuid, date, numeric) to anon, authenticated;
 grant execute on function public.app_delete_recovery(text, text, uuid) to anon, authenticated;
 grant execute on function public.reset_profile_pin(text, text, text) to anon, authenticated;

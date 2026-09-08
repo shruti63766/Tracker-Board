@@ -57,10 +57,8 @@ function formatMonth(month) {
   });
 }
 
-function formatCurrency(value) {
+function formatNumber(value) {
   return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
     maximumFractionDigits: 0,
   }).format(value || 0);
 }
@@ -243,7 +241,15 @@ function loadState() {
 
   try {
     const saved = JSON.parse(raw);
-    return { ...saved, targets: (saved.targets || []).map((target) => ({ ...target, id: target.id || crypto.randomUUID() })) };
+    const targets = (saved.targets || []).map((target) => ({ ...target, id: target.id || crypto.randomUUID() }));
+    const recoveries = (saved.recoveries || []).map((entry) => {
+      if (entry.targetId) return entry;
+      const matchingTargets = targets.filter(
+        (target) => target.employeeId === entry.employeeId && target.month === getMonthFromDate(entry.date)
+      );
+      return matchingTargets.length === 1 ? { ...entry, targetId: matchingTargets[0].id } : entry;
+    });
+    return { ...saved, targets, recoveries };
   } catch {
     return emptyState;
   }
@@ -269,7 +275,7 @@ async function getRemoteSnapshot() {
   return normalizeRemoteState(data);
 }
 
-function buildRows(state, month) {
+function buildEmployeeRows(state, month) {
   const employees = state.employees.filter((employee) => employee.role === "employee" && employee.active);
 
   return employees
@@ -277,16 +283,28 @@ function buildRows(state, month) {
       const targets = state.targets.filter(
         (item) => item.employeeId === employee.id && item.month === month
       );
-      const target = targets.reduce((sum, item) => sum + Number(item.amount), 0);
-      const targetName = targets.map((item) => item.name || "Monthly target").join(" + ") || "Monthly target";
-      const recovered = state.recoveries
-        .filter((item) => item.employeeId === employee.id && getMonthFromDate(item.date) === month)
-        .reduce((sum, item) => sum + Number(item.amount), 0);
-      const progress = target > 0 ? clampProgress((recovered / target) * 100) : 0;
-
-      return { ...employee, targets, target, targetName, recovered, progress };
+      return { ...employee, targets };
     })
-    .sort((a, b) => b.progress - a.progress || b.recovered - a.recovered);
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function buildProgressRows(state, month) {
+  return buildEmployeeRows(state, month)
+    .flatMap((employee) => {
+      if (!employee.targets.length) {
+        return [{ ...employee, rowId: `employee:${employee.id}`, targetId: null,
+          targetName: "No target assigned", target: 0, recovered: 0, progress: 0 }];
+      }
+      return employee.targets.map((target) => {
+        const recovered = state.recoveries
+          .filter((entry) => entry.targetId === target.id && getMonthFromDate(entry.date) === month)
+          .reduce((sum, entry) => sum + Number(entry.amount), 0);
+        const amount = Number(target.amount);
+        return { ...employee, rowId: target.id, targetId: target.id, targetName: target.name,
+          target: amount, recovered, progress: amount > 0 ? clampProgress((recovered / amount) * 100) : 0 };
+      });
+    })
+    .sort((a, b) => b.progress - a.progress || b.recovered - a.recovered || a.name.localeCompare(b.name));
 }
 
 export default function App() {
@@ -303,6 +321,7 @@ export default function App() {
   const [adminPinForm, setAdminPinForm] = useState({ employeeId: "", newPin: "" });
   const [entryForm, setEntryForm] = useState({
     date: new Date().toISOString().slice(0, 10),
+    targetId: "",
     amount: "",
   });
   const [editingEntryId, setEditingEntryId] = useState(null);
@@ -340,51 +359,38 @@ export default function App() {
   }, []);
 
   const months = useMemo(getLastSixMonths, []);
-  const rows = useMemo(() => buildRows(state, selectedMonth), [state, selectedMonth]);
+  const employeeRows = useMemo(() => buildEmployeeRows(state, selectedMonth), [state, selectedMonth]);
+  const rows = useMemo(() => buildProgressRows(state, selectedMonth), [state, selectedMonth]);
   const currentUser = session
     ? state.employees.find((employee) => employee.id === session.employeeId)
     : null;
   const isAdmin = currentUser?.role === "admin";
   const hasActiveAdmin = state.employees.some((employee) => employee.role === "admin" && employee.active);
-  const ownRow = rows.find((row) => row.id === currentUser?.id);
-
-  const totals = rows.reduce(
-    (acc, row) => {
-      acc.target += row.target;
-      acc.recovered += row.recovered;
-      return acc;
-    },
-    { target: 0, recovered: 0 }
+  const ownRows = rows.filter((row) => row.id === currentUser?.id && row.targetId);
+  const entryTargets = state.targets.filter((target) =>
+    target.employeeId === currentUser?.id && target.month === getMonthFromDate(entryForm.date)
   );
-  const overallProgress = totals.target > 0 ? clampProgress((totals.recovered / totals.target) * 100) : 0;
-  const summary = isAdmin
-    ? {
-        target: totals.target,
-        recovered: totals.recovered,
-        progress: overallProgress,
-        targetLabel: "Team target",
-        recoveredLabel: "Team amount",
-        progressLabel: "Overall",
-      }
-    : {
-        target: ownRow?.target || 0,
-        recovered: ownRow?.recovered || 0,
-        progress: ownRow?.progress || 0,
-        targetLabel: ownRow?.targetName || "My target",
-        recoveredLabel: "My amount",
-        progressLabel: "My progress",
-      };
+
+  useEffect(() => {
+    setEntryForm((current) => {
+      const available = state.targets.filter((target) =>
+        target.employeeId === currentUser?.id && target.month === getMonthFromDate(current.date)
+      );
+      if (available.some((target) => target.id === current.targetId)) return current;
+      return { ...current, targetId: available[0]?.id || "" };
+    });
+  }, [currentUser?.id, entryForm.date, state.targets]);
 
   useEffect(() => {
     const scope = `${selectedMonth}:${currentUser?.id || ""}`;
     const preserve = targetDraftScope.current === scope;
     targetDraftScope.current = scope;
-    setTargetDrafts((current) => Object.fromEntries(rows.map((row) => [row.id,
+    setTargetDrafts((current) => Object.fromEntries(employeeRows.map((row) => [row.id,
       preserve && current[row.id] ? current[row.id] : row.targets.length
         ? row.targets.map((target) => ({ ...target, amount: String(target.amount) }))
         : [{ id: crypto.randomUUID(), name: "Monthly target", amount: "" }],
     ])));
-  }, [selectedMonth, state.targets, state.employees, currentUser?.id]);
+  }, [selectedMonth, state.targets, state.employees, currentUser?.id, employeeRows]);
 
   function flash(message) {
     setNotice(message);
@@ -651,6 +657,11 @@ export default function App() {
       flash("Entries are limited to the latest six months.");
       return;
     }
+    const selectedTarget = entryTargets.find((target) => target.id === entryForm.targetId);
+    if (!selectedTarget) {
+      flash("Select a target for this entry.");
+      return;
+    }
     if (!Number.isFinite(amount) || amount <= 0 || !/^\d+$/.test(entryForm.amount)) {
       flash("Amount must be a positive whole number.");
       return;
@@ -662,6 +673,7 @@ export default function App() {
           employee_code_input: currentUser.id,
           employee_pin: session.pin,
           entry_id_input: editingEntryId,
+          target_id_input: entryForm.targetId,
           recovery_date_input: entryForm.date,
           recovery_amount: amount,
         });
@@ -674,7 +686,7 @@ export default function App() {
         await refreshRemoteState();
         setEditingEntryId(null);
         setSelectedMonth(getMonthFromDate(entryForm.date));
-        setEntryForm({ date: new Date().toISOString().slice(0, 10), amount: "" });
+        setEntryForm({ date: new Date().toISOString().slice(0, 10), targetId: "", amount: "" });
         flash("Entry updated.");
         return;
       }
@@ -682,12 +694,12 @@ export default function App() {
       setState((current) => ({
         ...current,
         recoveries: current.recoveries.map((entry) =>
-          entry.id === editingEntryId ? { ...entry, date: entryForm.date, amount } : entry
+          entry.id === editingEntryId ? { ...entry, date: entryForm.date, targetId: entryForm.targetId, amount } : entry
         ),
       }));
       setEditingEntryId(null);
       setSelectedMonth(getMonthFromDate(entryForm.date));
-      setEntryForm({ date: new Date().toISOString().slice(0, 10), amount: "" });
+      setEntryForm({ date: new Date().toISOString().slice(0, 10), targetId: "", amount: "" });
       flash("Entry updated.");
       return;
     }
@@ -696,6 +708,7 @@ export default function App() {
       const { data, error } = await supabase.rpc("app_add_recovery", {
         employee_code_input: currentUser.id,
         employee_pin: session.pin,
+        target_id_input: entryForm.targetId,
         recovery_date_input: entryForm.date,
         recovery_amount: amount,
       });
@@ -718,6 +731,7 @@ export default function App() {
         {
           id: crypto.randomUUID(),
           employeeId: currentUser.id,
+          targetId: entryForm.targetId,
           date: entryForm.date,
           amount,
         },
@@ -731,12 +745,12 @@ export default function App() {
 
   function startEditEntry(entry) {
     setEditingEntryId(entry.id);
-    setEntryForm({ date: entry.date, amount: String(entry.amount) });
+    setEntryForm({ date: entry.date, targetId: entry.targetId || "", amount: String(entry.amount) });
   }
 
   function cancelEditEntry() {
     setEditingEntryId(null);
-    setEntryForm({ date: new Date().toISOString().slice(0, 10), amount: "" });
+    setEntryForm({ date: new Date().toISOString().slice(0, 10), targetId: "", amount: "" });
   }
 
   async function deleteRecovery(entryId) {
@@ -920,14 +934,14 @@ export default function App() {
       .sort((a, b) => a.employeeId.localeCompare(b.employeeId) || b.date.localeCompare(a.date))
       .map((entry) => {
         const employee = state.employees.find((item) => item.id === entry.employeeId);
-        const row = rows.find((item) => item.id === entry.employeeId);
+        const target = state.targets.find((item) => item.id === entry.targetId);
         return [
           entry.employeeId,
           employee?.name || "",
           entry.date,
           Number(entry.amount),
           selectedMonth,
-          row?.targetName || "Monthly target",
+          target?.name || "Unassigned",
         ];
       });
     const workbook = createWorkbook([
@@ -949,7 +963,7 @@ export default function App() {
       {
         name: "Targets",
         rows: [["Employee ID", "Name", "Month", "Target Name", "Target"],
-          ...rows.flatMap((row) => row.targets.map((target) => [row.id, row.name, selectedMonth, target.name, Number(target.amount)]))],
+          ...employeeRows.flatMap((row) => row.targets.map((target) => [row.id, row.name, selectedMonth, target.name, Number(target.amount)]))],
       },
       {
         name: "Detailed Entries",
@@ -1228,20 +1242,24 @@ export default function App() {
 
       {notice && <p className="notice floating">{notice}</p>}
 
-      {!isAdmin && (
-        <section className="summary-grid" aria-label="Summary">
-          <MetricCard icon={Target} label={summary.targetLabel} value={formatCurrency(summary.target)} />
-          <MetricCard icon={Landmark} label={summary.recoveredLabel} value={formatCurrency(summary.recovered)} />
-          <MetricCard icon={BarChart3} label={summary.progressLabel} value={`${summary.progress.toFixed(1)}%`} />
+      {!isAdmin && ownRows.map((row) => (
+        <section className="target-summary" aria-label={`${row.targetName} progress`} key={row.rowId}>
+          <h2>{row.targetName}</h2>
+          <div className="summary-grid">
+            <MetricCard icon={Target} label="Target" value={formatNumber(row.target)} />
+            <MetricCard icon={Landmark} label="Achieved" value={formatNumber(row.recovered)} />
+            <MetricCard icon={BarChart3} label="Progress" value={`${row.progress.toFixed(1)}%`} />
+          </div>
         </section>
-      )}
+      ))}
 
       {isAdmin ? (
         <AdminView
           employeeForm={employeeForm}
           onEmployeeFormChange={setEmployeeForm}
           onAddEmployee={addEmployee}
-          rows={rows}
+          employeeRows={employeeRows}
+          progressRows={rows}
           selectedMonth={selectedMonth}
           targetDrafts={targetDrafts}
           onTargetDraftChange={setTargetDrafts}
@@ -1255,8 +1273,9 @@ export default function App() {
       ) : (
         <EmployeeView
           currentUser={currentUser}
-          ownRow={ownRow}
+          ownRows={ownRows}
           rows={rows}
+          targets={state.targets.filter((target) => target.employeeId === currentUser.id)}
           entries={state.recoveries
             .filter((item) => item.employeeId === currentUser.id && getMonthFromDate(item.date) === selectedMonth)
             .sort((a, b) => b.date.localeCompare(a.date))}
@@ -1315,7 +1334,8 @@ function AdminView({
   employeeForm,
   onEmployeeFormChange,
   onAddEmployee,
-  rows,
+  employeeRows,
+  progressRows,
   selectedMonth,
   targetDrafts,
   onTargetDraftChange,
@@ -1351,7 +1371,8 @@ function AdminView({
 
       {activeTab === "dashboard" ? (
         <AdminDashboard
-          rows={rows}
+          employeeRows={employeeRows}
+          progressRows={progressRows}
           selectedMonth={selectedMonth}
           targetDrafts={targetDrafts}
           onTargetDraftChange={onTargetDraftChange}
@@ -1366,7 +1387,7 @@ function AdminView({
           adminPinForm={adminPinForm}
           onAdminPinFormChange={onAdminPinFormChange}
           onAdminResetPin={onAdminResetPin}
-          rows={rows}
+          rows={employeeRows}
           onRequestDelete={onRequestDelete}
         />
       )}
@@ -1374,7 +1395,7 @@ function AdminView({
   );
 }
 
-function AdminDashboard({ rows, selectedMonth, targetDrafts, onTargetDraftChange, onSaveTarget, onDeleteTarget }) {
+function AdminDashboard({ employeeRows, progressRows, selectedMonth, targetDrafts, onTargetDraftChange, onSaveTarget, onDeleteTarget }) {
   return (
     <>
       <section className="overview-grid" aria-label="Graphical performance overview">
@@ -1382,11 +1403,11 @@ function AdminDashboard({ rows, selectedMonth, targetDrafts, onTargetDraftChange
           <div className="section-heading compact">
             <div>
               <p className="eyebrow">Admin dashboard</p>
-              <h2>Employee target pie</h2>
+              <h2>Individual target pie</h2>
             </div>
             <BarChart3 size={22} aria-hidden="true" />
           </div>
-          <EmployeePieChart rows={rows} />
+          <EmployeePieChart rows={progressRows.filter((row) => row.targetId)} />
         </section>
       </section>
 
@@ -1395,11 +1416,12 @@ function AdminDashboard({ rows, selectedMonth, targetDrafts, onTargetDraftChange
           <div>
             <p className="eyebrow">Target planning</p>
             <h2>Set target names and amounts</h2>
-            <p>Add multiple targets per employee. Edit names and amounts, then Save. Delete removes a target row. Monthly progress uses their combined amount.</p>
+            <p>Each target has its own achieved amount and progress. Edit names and amounts, then Save.</p>
           </div>
         </div>
         <ProgressTable
-          rows={rows}
+          rows={employeeRows}
+          progressRows={progressRows}
           allowTargetEdit
           targetDrafts={targetDrafts}
           onTargetDraftChange={onTargetDraftChange}
@@ -1536,11 +1558,11 @@ function TeamChart({ rows }) {
       </div>
       <div className="chart-stats">
         <span>
-          <b>{formatCurrency(totalTarget)}</b>
+          <b>{formatNumber(totalTarget)}</b>
           Team target
         </span>
         <span>
-          <b>{formatCurrency(totalAmount)}</b>
+          <b>{formatNumber(totalAmount)}</b>
           Team amount
         </span>
       </div>
@@ -1549,7 +1571,7 @@ function TeamChart({ rows }) {
 }
 
 function EmployeePieChart({ rows }) {
-  const [activeId, setActiveId] = useState(rows[0]?.id || null);
+  const [activeId, setActiveId] = useState(rows[0]?.rowId || null);
 
   if (rows.length === 0) {
     return <p className="empty-state">No employees yet.</p>;
@@ -1558,36 +1580,36 @@ function EmployeePieChart({ rows }) {
   const colors = ["#7ee0c5", "#f2bf57", "#8ca5ff", "#ff8f70", "#b6e66a", "#d28cff", "#69c7ff", "#ff7ea8"];
   const totalTarget = rows.reduce((sum, row) => sum + row.target, 0);
   const fallbackShare = 100 / rows.length;
-  const activeRow = rows.find((row) => row.id === activeId) || rows[0];
+  const activeRow = rows.find((row) => row.rowId === activeId) || rows[0];
   const slices = buildPieSlices(rows, totalTarget, fallbackShare);
 
   return (
     <div className="employee-pie-layout">
       <figure className="employee-pie-card">
-        <svg className="employee-pie-svg" viewBox="0 0 220 220" role="img" aria-label="Employee target share pie">
+        <svg className="employee-pie-svg" viewBox="0 0 220 220" role="img" aria-label="Individual target share pie">
           {slices.map((slice, index) =>
             slice.fullCircle ? (
               <circle
-                className={`pie-slice ${activeRow.id === slice.row.id ? "active" : ""}`}
-                key={slice.row.id}
+                className={`pie-slice ${activeRow.rowId === slice.row.rowId ? "active" : ""}`}
+                key={slice.row.rowId}
                 cx="110"
                 cy="110"
                 r="96"
                 fill={colors[index % colors.length]}
-                onMouseEnter={() => setActiveId(slice.row.id)}
-                onFocus={() => setActiveId(slice.row.id)}
+                onMouseEnter={() => setActiveId(slice.row.rowId)}
+                onFocus={() => setActiveId(slice.row.rowId)}
                 tabIndex="0"
               >
                 <title>{pieTitle(slice.row)}</title>
               </circle>
             ) : (
               <path
-                className={`pie-slice ${activeRow.id === slice.row.id ? "active" : ""}`}
-                key={slice.row.id}
+                className={`pie-slice ${activeRow.rowId === slice.row.rowId ? "active" : ""}`}
+                key={slice.row.rowId}
                 d={slice.path}
                 fill={colors[index % colors.length]}
-                onMouseEnter={() => setActiveId(slice.row.id)}
-                onFocus={() => setActiveId(slice.row.id)}
+                onMouseEnter={() => setActiveId(slice.row.rowId)}
+                onFocus={() => setActiveId(slice.row.rowId)}
                 tabIndex="0"
               >
                 <title>{pieTitle(slice.row)}</title>
@@ -1607,8 +1629,8 @@ function EmployeePieChart({ rows }) {
         <div className="pie-focus-strip">
           <strong>{activeRow.name}</strong>
           <span>{activeRow.targetName}</span>
-          <b>{formatCurrency(activeRow.target)} target</b>
-          <b>{formatCurrency(activeRow.recovered)} achieved</b>
+          <b>{formatNumber(activeRow.target)} target</b>
+          <b>{formatNumber(activeRow.recovered)} achieved</b>
         </div>
         <table className="pie-table">
           <thead>
@@ -1623,9 +1645,9 @@ function EmployeePieChart({ rows }) {
           <tbody>
             {rows.map((row, index) => (
               <tr
-                className={activeRow.id === row.id ? "active" : ""}
-                key={row.id}
-                onMouseEnter={() => setActiveId(row.id)}
+                className={activeRow.rowId === row.rowId ? "active" : ""}
+                key={row.rowId}
+                onMouseEnter={() => setActiveId(row.rowId)}
               >
                 <td>
                   <span className="pie-dot" style={{ background: colors[index % colors.length] }} />
@@ -1633,8 +1655,8 @@ function EmployeePieChart({ rows }) {
                   <small>{row.id}</small>
                 </td>
                 <td>{row.targetName}</td>
-                <td>{formatCurrency(row.target)}</td>
-                <td>{formatCurrency(row.recovered)}</td>
+                <td>{formatNumber(row.target)}</td>
+                <td>{formatNumber(row.recovered)}</td>
                 <td>{row.progress.toFixed(1)}%</td>
               </tr>
             ))}
@@ -1646,7 +1668,7 @@ function EmployeePieChart({ rows }) {
 }
 
 function pieTitle(row) {
-  return `${row.name} | ${row.targetName} | Target ${formatCurrency(row.target)} | Achieved ${formatCurrency(
+  return `${row.name} | ${row.targetName} | Target ${formatNumber(row.target)} | Achieved ${formatNumber(
     row.recovered
   )} | ${row.progress.toFixed(1)}% complete`;
 }
@@ -1699,7 +1721,7 @@ function PerformanceBars({ rows }) {
   return (
     <div className="bar-list">
       {rows.map((row) => (
-        <div className="bar-row" key={row.id}>
+        <div className="bar-row" key={row.rowId}>
           <div>
             <strong>{row.name}</strong>
             <span>{row.targetName}</span>
@@ -1739,8 +1761,9 @@ function EmployeeDirectory({ rows, onRequestDelete }) {
 
 function EmployeeView({
   currentUser,
-  ownRow,
+  ownRows,
   rows,
+  targets,
   entries,
   entryForm,
   editingEntryId,
@@ -1750,17 +1773,18 @@ function EmployeeView({
   onCancelEditEntry,
   onDeleteRecovery,
 }) {
+  const availableTargets = targets.filter((target) => target.month === getMonthFromDate(entryForm.date));
+
   return (
     <>
       <section className="personal-band">
         <div>
           <p className="eyebrow">{currentUser.id}</p>
           <h2>{currentUser.name}</h2>
-          <span className="personal-subline">{formatCurrency(ownRow?.recovered || 0)} logged this month</span>
+          <span className="personal-subline">Each assigned target is tracked separately</span>
         </div>
         <div className="hero-progress">
-          <span>{ownRow?.progress.toFixed(1) || "0.0"}%</span>
-          <ProgressBar value={ownRow?.progress || 0} />
+          <span>{ownRows.length} {ownRows.length === 1 ? "target" : "targets"}</span>
         </div>
       </section>
 
@@ -1779,6 +1803,19 @@ function EmployeeView({
                 onEntryFormChange((current) => ({ ...current, date: event.target.value }))
               }
             />
+          </label>
+          <label>
+            Target
+            <select
+              value={entryForm.targetId}
+              onChange={(event) => onEntryFormChange((current) => ({ ...current, targetId: event.target.value }))}
+              required
+            >
+              {availableTargets.length === 0 && <option value="">No target assigned for this month</option>}
+              {availableTargets.map((target) => (
+                <option key={target.id} value={target.id}>{target.name}</option>
+              ))}
+            </select>
           </label>
           <label>
             Amount
@@ -1820,7 +1857,8 @@ function EmployeeView({
                 <div className="entry-row" key={entry.id}>
                   <div>
                     <span>{new Date(entry.date).toLocaleDateString("en-IN")}</span>
-                    <strong>{formatCurrency(entry.amount)}</strong>
+                    <span>{targets.find((target) => target.id === entry.targetId)?.name || "Unassigned target"}</span>
+                    <strong>{formatNumber(entry.amount)}</strong>
                   </div>
                   <div className="row-actions">
                     <button className="mini-button" type="button" onClick={() => onStartEditEntry(entry)}>
@@ -1855,6 +1893,7 @@ function EmployeeView({
 function ProgressTable({
   rows,
   allowTargetEdit = false,
+  progressRows = [],
   targetDrafts = {},
   onTargetDraftChange,
   onSaveTarget,
@@ -1865,69 +1904,71 @@ function ProgressTable({
     <div className="table-wrap">
       <table>
         <thead>
-          <tr>
-            <th>Employee</th>
-            <th>Target name</th>
-            <th>Target</th>
-            <th>Amount</th>
-            <th>Progress</th>
-            {allowTargetEdit && <th>Actions</th>}
-          </tr>
+          {allowTargetEdit ? (
+            <tr><th>Employee</th><th>Individual targets</th><th>Actions</th></tr>
+          ) : (
+            <tr><th>Employee</th><th>Target name</th><th>Target</th><th>Achieved</th><th>Progress</th></tr>
+          )}
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row.id}>
+            <tr key={allowTargetEdit ? row.id : row.rowId}>
               <td>
                 <strong>{row.name}</strong>
                 <span>{row.id}</span>
               </td>
               {allowTargetEdit ? (
-                <td colSpan={2}>
+                <td>
                   <div className="stack">
                     {(targetDrafts[row.id] || []).map((draft, index) => (
-                      <div className="row-actions" key={draft.id}>
-                        <input className="target-name-input" value={draft.name}
+                      <div className="target-edit-row" key={draft.id}>
+                        <div className="row-actions">
+                          <input className="target-name-input" value={draft.name}
                           aria-label={`Target name for ${row.name}${index ? ` ${index + 1}` : ""}`}
                           placeholder="Loan Recovery"
                           onChange={(event) => onTargetDraftChange((current) => ({ ...current,
                             [row.id]: current[row.id].map((item) => item.id === draft.id ? { ...item, name: event.target.value } : item),
                           }))} />
-                        <input className="table-input" value={draft.amount} inputMode="numeric"
+                          <input className="table-input" value={draft.amount} inputMode="numeric"
                           aria-label={`Target for ${row.name}${index ? ` ${index + 1}` : ""}`}
                           onChange={(event) => onTargetDraftChange((current) => ({ ...current,
                             [row.id]: current[row.id].map((item) => item.id === draft.id ? { ...item, amount: event.target.value.replace(/\D/g, "") } : item),
                           }))} />
-                        {row.targets.some((target) => target.id === draft.id) && (
+                          {row.targets.some((target) => target.id === draft.id) && (
                           <button className="mini-button" type="button"
                             onClick={(event) => event.currentTarget.parentElement.querySelector("input").focus()}>
                             <Pencil size={16} aria-hidden="true" />Edit
                           </button>
-                        )}
-                        <button className="mini-button" type="button" onClick={() => onSaveTarget(row.id, draft.id)}>
-                          <Save size={16} aria-hidden="true" />Save
-                        </button>
-                        <button className="mini-danger-button" type="button"
+                          )}
+                          <button className="mini-button" type="button" onClick={() => onSaveTarget(row.id, draft.id)}>
+                            <Save size={16} aria-hidden="true" />Save
+                          </button>
+                          <button className="mini-danger-button" type="button"
                           aria-label={`Delete target ${index + 1} for ${row.name}`}
                           onClick={() => onDeleteTarget(row.id, draft.id)}>
-                          <Trash2 size={16} aria-hidden="true" />Delete
-                        </button>
+                            <Trash2 size={16} aria-hidden="true" />Delete
+                          </button>
+                        </div>
+                        {(() => {
+                          const progress = progressRows.find((item) => item.targetId === draft.id);
+                          return progress ? (
+                            <span>Achieved {formatNumber(progress.recovered)} | {progress.progress.toFixed(1)}%</span>
+                          ) : <span>Save this target to start tracking progress.</span>;
+                        })()}
                       </div>
                     ))}
-                    <span>Total: {formatCurrency(row.target)}</span>
                   </div>
                 </td>
               ) : (
-                <><td><div className="stack">{row.targets.map((target) => (
-                  <span className="target-name" key={target.id}>{target.name}: {formatCurrency(target.amount)}</span>
-                ))}{!row.targets.length && "No targets assigned"}</div></td><td>{formatCurrency(row.target)}</td></>
+                <><td><span className="target-name">{row.targetName}</span></td><td>{formatNumber(row.target)}</td></>
               )}
-              <td>{formatCurrency(row.recovered)}</td>
-              <td>
+              {!allowTargetEdit && <td>{formatNumber(row.recovered)}</td>}
+              {!allowTargetEdit && <td>
                 <div className="progress-cell">
                   <span>{row.progress.toFixed(1)}%</span>
                   <ProgressBar value={row.progress} />
                 </div>
-              </td>
+              </td>}
               {allowTargetEdit && (
                 <td>
                   <div className="row-actions">
@@ -1955,11 +1996,11 @@ function Leaderboard({ rows }) {
   return (
     <div className="leaderboard">
       {rows.map((row, index) => (
-        <div className="leader-row" key={row.id}>
+        <div className="leader-row" key={row.rowId}>
           <span className="rank">{index + 1}</span>
           <div>
             <strong>{row.name}</strong>
-            <span>{formatCurrency(row.recovered)}</span>
+            <span>{formatNumber(row.recovered)}</span>
           </div>
           <b>{row.progress.toFixed(1)}%</b>
         </div>

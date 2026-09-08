@@ -362,6 +362,26 @@ input::placeholder {
   gap: 12px;
 }
 
+.target-summary {
+  display: grid;
+  gap: 10px;
+}
+
+.target-summary h2 {
+  font-size: 1rem;
+}
+
+.target-edit-row {
+  display: grid;
+  gap: 7px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(155, 180, 169, 0.12);
+}
+
+.target-edit-row:last-child {
+  border-bottom: 0;
+}
+
 .overview-grid {
   display: grid;
   grid-template-columns: 1fr;
